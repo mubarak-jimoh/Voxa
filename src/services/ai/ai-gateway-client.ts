@@ -7,6 +7,7 @@ import {
   classifyGatewayErrorMessage,
   TalkAIError,
 } from './talk-ai-errors';
+import { fetchWithTimeout } from '../../utils/fetch-with-timeout';
 import {
   logGatewayDiagnostic,
   resolveGatewayUrl,
@@ -119,7 +120,7 @@ async function postToGateway(
     throw new TalkAIError('gateway_not_configured');
   }
 
-  const response = await fetch(gatewayUrl, {
+  const response = await fetchWithTimeout(gatewayUrl, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,

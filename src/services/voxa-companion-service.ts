@@ -25,7 +25,7 @@ import {
 import { GenerateReplyResult, VoxaRepositories } from './contracts';
 import { IAIService } from './contracts';
 import { buildDailyBriefing } from '../utils/daily-briefing';
-import { buildVoxaCheckInConfirmation, getUpcomingReminders } from '../utils/reminders';
+import { buildVoxaCheckInConfirmation, formatReminderTime, getUpcomingReminders } from '../utils/reminders';
 import { actionIntentParser } from './actions/action-intent-parser';
 import { ChatActionExecutor } from './actions/chat-action-executor';
 import { CompanionIntelligenceService } from './intelligence/companion-intelligence-service';
@@ -138,6 +138,8 @@ export type SendChatMessageInput = {
   loadedProfile?: UserProfile;
   /** Already-visible conversation turns — skips a remote history refetch when present. */
   recentHistory?: Message[];
+  /** Retry a persisted user turn without inserting a duplicate. */
+  existingUserMessage?: Message;
 };
 
 export type SendChatMessageOptions = {
@@ -1078,17 +1080,25 @@ export class VoxaCompanionService {
       ? Promise.resolve([] as Reminder[])
       : this.repositories.reminders.listReminders(input.userId);
 
-    const userDraft = buildLocalTalkMessage({
-      id: createId('msg'),
-      conversationId: input.conversationId,
-      role: 'user',
-      content: displayContent,
-      mode: input.mode,
-      attachments,
-    });
-    await this.repositories.messages.upsertMessage(userDraft);
+    const userDraft =
+      input.existingUserMessage ??
+      buildLocalTalkMessage({
+        id: createId('msg'),
+        conversationId: input.conversationId,
+        role: 'user',
+        content: displayContent,
+        mode: input.mode,
+        attachments,
+      });
+    if (input.existingUserMessage) {
+      await this.repositories.messages.updateMessage(userDraft.id, { status: 'pending' }).catch(() => undefined);
+    } else {
+      await this.repositories.messages.upsertMessage(userDraft);
+    }
     talkPerf('persist-user', talkPerfNow() - persistUserStarted);
-    const persistUserRemote = this.persistTalkMessageRemote(userDraft);
+    const persistUserRemote = input.existingUserMessage
+      ? Promise.resolve(userDraft)
+      : this.persistTalkMessageRemote(userDraft);
     let userMessage = userDraft;
 
     if (this.storage) {
@@ -1572,6 +1582,7 @@ export class VoxaCompanionService {
       mode: effectiveMode,
     });
     await this.repositories.messages.upsertMessage(voxaMessage);
+    await this.repositories.messages.updateMessage(userMessage.id, { status: 'sent' }).catch(() => undefined);
     talkPerf('persist-reply', talkPerfNow() - persistReplyStarted);
     options?.onAssistantReady?.({ userMessage, voxaMessage });
 
@@ -1977,18 +1988,26 @@ export class VoxaCompanionService {
     }
 
     const reminder = await this.repositories.reminders.createReminder(input);
-
-    try {
-      const { notificationService } = await import('./notifications/notification-service');
-      const notificationId = await notificationService.scheduleReminderFromEntity(reminder);
-      await this.repositories.reminders.updateReminder(reminder.id, { notificationId });
-    } catch (error) {
-      console.warn('[Voxa] Failed to schedule notification for reminder.', error);
-    }
+    const { scheduleLocalReminderIfAllowed, reminderScheduleConfirmation } = await import(
+      './notifications/schedule-local-reminder'
+    );
+    const scheduled = await scheduleLocalReminderIfAllowed(reminder);
+    const saved =
+      scheduled.ok
+        ? await this.repositories.reminders.updateReminder(reminder.id, {
+            notificationId: scheduled.notificationId,
+          })
+        : reminder;
+    const when = formatReminderTime(saved.scheduledAt);
+    const talkCopy = reminderScheduleConfirmation({
+      title: saved.title,
+      when,
+      scheduled,
+    });
 
     return {
-      reminder,
-      confirmationMessage: buildVoxaCheckInConfirmation(reminder),
+      reminder: saved,
+      confirmationMessage: scheduled.ok ? buildVoxaCheckInConfirmation(saved) : talkCopy.confirmationMessage,
     };
   }
 

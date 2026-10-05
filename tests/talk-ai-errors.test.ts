@@ -25,7 +25,9 @@ describe('talk AI errors', () => {
     assert.equal(classifyGatewayErrorMessage('x', 'database_error'), 'database_error');
     assert.equal(classifyGatewayErrorMessage('x', 'invalid_session'), 'invalid_session');
     assert.equal(classifyGatewayErrorMessage('x', 'provider_error'), 'provider_error');
-    assert.equal(classifyGatewayErrorMessage('x', 'daily_limit'), 'rate_limited');
+    assert.equal(classifyGatewayErrorMessage('x', 'daily_limit'), 'usage_limited');
+    assert.equal(classifyGatewayErrorMessage('x', 'fair_use_exceeded'), 'usage_limited');
+    assert.equal(classifyGatewayErrorMessage('Request timed out after 45000ms'), 'request_timeout');
   });
 
   it('maps deployment errors to calm user copy', () => {

@@ -5,6 +5,8 @@ export type TalkAIErrorCode =
   | 'invalid_session'
   | 'duplicate'
   | 'rate_limited'
+  | 'usage_limited'
+  | 'request_timeout'
   | 'message_too_large'
   | 'context_too_large'
   | 'image_too_large'
@@ -49,6 +51,16 @@ const PRESENTATIONS: Record<TalkAIErrorCode, Presentation> = {
   rate_limited: {
     message: 'AI gateway rate limited',
     userMessage: "You're sending messages quickly. Give Voxa a moment, then try again.",
+    isDeploymentBlocker: false,
+  },
+  usage_limited: {
+    message: 'AI gateway usage limit reached',
+    userMessage: "You've reached today's chat limit. You can keep reading this conversation and try again later.",
+    isDeploymentBlocker: false,
+  },
+  request_timeout: {
+    message: 'AI gateway request timed out',
+    userMessage: "Voxa didn't respond in time. Tap the message to retry — it won't send twice.",
     isDeploymentBlocker: false,
   },
   message_too_large: {
@@ -117,9 +129,10 @@ const SERVER_CODE_MAP: Record<string, TalkAIErrorCode> = {
   provider_not_configured: 'provider_not_configured',
   provider_error: 'provider_error',
   database_error: 'database_error',
-  daily_limit: 'rate_limited',
-  monthly_limit: 'rate_limited',
-  fair_use_exceeded: 'rate_limited',
+  daily_limit: 'usage_limited',
+  monthly_limit: 'usage_limited',
+  fair_use_exceeded: 'usage_limited',
+  limits_unavailable: 'usage_limited',
   message_too_large: 'message_too_large',
   context_too_large: 'context_too_large',
   image_too_large: 'image_too_large',
@@ -151,13 +164,19 @@ export function classifyGatewayErrorMessage(message: string, code?: string): Tal
     return 'database_error';
   }
   if (lower.includes('duplicate')) return 'duplicate';
+  if (lower.includes('timed out') || lower.includes('timeout') || lower.includes('aborted')) {
+    return 'request_timeout';
+  }
   if (
-    lower.includes('rate limit') ||
-    lower.includes('too many') ||
     lower.includes('daily limit') ||
     lower.includes('monthly limit') ||
-    lower.includes('fair-use')
+    lower.includes('fair-use') ||
+    lower.includes('fair use') ||
+    lower.includes('usage limit')
   ) {
+    return 'usage_limited';
+  }
+  if (lower.includes('rate limit') || lower.includes('too many')) {
     return 'rate_limited';
   }
   if (lower.includes('message exceeds maximum size') || lower.includes('message too large')) {
@@ -196,4 +215,8 @@ export function talkUserErrorLooksTechnical(message: string): boolean {
 
 export function isGatewayDeploymentError(err: unknown): boolean {
   return err instanceof TalkAIError && err.code === 'gateway_not_deployed';
+}
+
+export function isTransientTalkRateLimit(code: TalkAIErrorCode): boolean {
+  return code === 'rate_limited';
 }

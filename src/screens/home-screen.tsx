@@ -506,16 +506,23 @@ export function HomeScreen({ navigation }: Props) {
           data={phase10}
           onPrimary={() => {
             const a = phase10.adventure;
-            if (isFeatureVisible('socialGames')) {
+            if (a.primaryAction === 'spin') {
+              navigation.navigate('DailySpin');
+              return;
+            }
+            if (a.primaryAction === 'challenge') {
+              navigation.navigate('DailyChallenge');
+              return;
+            }
+            if (a.primaryAction === 'mission') {
+              navigation.navigate('WeeklyMission');
+              return;
+            }
+            if (isFeatureVisible('socialGames') || a.featuredGame) {
               navigation.navigate('GamesHub');
               return;
             }
-            if (a.primaryAction === 'challenge') navigation.navigate('DailyChallenge');
-            else if (a.primaryAction === 'mission') navigation.navigate('WeeklyMission');
-            else if (a.primaryAction === 'spin') navigation.navigate('DailySpin');
-            else if (a.featuredGame) {
-              navigation.navigate('GamesHub');
-            } else navigation.navigate('DailyChallenge');
+            navigation.navigate('DailyChallenge');
           }}
           onChallengeDetails={() => navigation.navigate('DailyChallenge')}
           onMission={() => navigation.navigate('WeeklyMission')}

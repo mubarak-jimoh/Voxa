@@ -20,6 +20,10 @@ import {
   View,
   Alert,
   Share,
+  AppState,
+  type AppStateStatus,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
 } from 'react-native';
 
 import { SuggestedReplies } from '../components/chat/suggested-replies';
@@ -43,10 +47,15 @@ import {
 import { shouldApplyTalkMessageLoad } from '../services/chat/talk-load-apply';
 import {
   beginTalkSend,
+  clearExpiredTalkCooldowns,
   composerTextAfterFailedSend,
   createTalkSendGuard,
   endTalkSend,
+  isStaleTalkRateLimitBanner,
+  noteBurstRateLimit,
+  recoverTimedOutTalkSend,
 } from '../services/chat/talk-send-guard';
+import { isTalkListNearBottom, shouldPinTalkToLatest } from '../services/chat/talk-list-pin';
 import { composerTextAfterDraftRestore, composerTextAfterStarterPrefill } from '../services/chat/talk-starter-prefill';
 import { getCompanionMode } from '../constants/companion-modes';
 import {
@@ -65,7 +74,7 @@ import { MainTabParamList, RootStackParamList } from '../navigation/types';
 import { FeatureLimitError } from '../services/billing/subscription-service';
 import { getAIProviderInfo } from '../services/ai/create-ai-service';
 import { warmAiGateway } from '../services/ai/ai-gateway-client';
-import { formatTalkErrorForUser } from '../services/ai/talk-ai-errors';
+import { formatTalkErrorForUser, TalkAIError } from '../services/ai/talk-ai-errors';
 import { friendlyErrorMessage } from '../utils/friendly-error';
 import { toggleBookmark, listBookmarks, removeBookmark, ChatBookmark } from '../services/chat/chat-bookmarks-service';
 import {
@@ -81,6 +90,7 @@ import {
   speakCompanionReply,
   stopCompanionSpeech,
 } from '../services/voice/companion-speech-service';
+import { subscribeSpeechOwner } from '../services/voice/speech-playback-coordinator';
 import { navigateToPaywall } from '../utils/paywall-navigation';
 import { recordChatLatency } from '../utils/chat-debug-state';
 import { logFeature } from '../utils/feature-logger';
@@ -165,6 +175,7 @@ export function ChatScreen() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [streamingText, setStreamingText] = useState<string | null>(null);
   const [thinkingStage, setThinkingStage] = useState(0);
@@ -207,6 +218,12 @@ export function ChatScreen() {
   const sendEpochRef = useRef(0);
   const sendGuardRef = useRef(createTalkSendGuard());
   const thinkingStageInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+  const userReadingHistoryRef = useRef(false);
+  const pinTalkOnNextLayoutRef = useRef(true);
+  const sendErrorCodeRef = useRef<string | null>(null);
+  const sendErrorAtRef = useRef(0);
+  const appActiveRef = useRef(true);
+  const speechAlertAllowedRef = useRef(true);
 
   messagesLengthRef.current = messages.length;
 
@@ -313,7 +330,7 @@ export function ChatScreen() {
         if (paramConversationId) {
           conversation = await services.repositories.conversations.getConversation(paramConversationId);
           if (!conversation) {
-            setError('Conversation not found.');
+            setLoadError('Conversation not found.');
             setIsLoading(false);
             return;
           }
@@ -331,7 +348,7 @@ export function ChatScreen() {
           return;
         }
         setIsLoading(true);
-        setError(null);
+        setLoadError(null);
         const loadedMessages = await companion.loadChatMessages(conversation.id);
         setConversationId(conversation.id);
         if (
@@ -362,7 +379,7 @@ export function ChatScreen() {
         recordTiming('chat.load', Date.now() - loadStarted);
       } catch (err) {
         logFeature('chat.load', 'failure', err instanceof Error ? err.message : 'Failed to load chat.', Date.now() - loadStarted);
-        setError(friendlyErrorMessage(err, "Couldn't open this conversation. Try again."));
+        setLoadError(friendlyErrorMessage(err, "Couldn't open this conversation. Try again."));
       } finally {
         setIsLoading(false);
       }
@@ -381,6 +398,7 @@ export function ChatScreen() {
         void loadChat();
       }
       return () => {
+        speechAlertAllowedRef.current = false;
         void stopCompanionSpeech();
         setIsSpeaking(false);
         setSpeakingMessageId(null);
@@ -393,12 +411,15 @@ export function ChatScreen() {
       if (!profile || !isFeatureVisible('playAloud')) return;
       const cleaned = text.trim();
       if (!cleaned) return;
+      speechAlertAllowedRef.current = true;
       setIsSpeaking(true);
       setSpeakingMessageId(messageId ?? null);
       try {
         await speakCompanionReply(cleaned, profile, { messageId });
       } catch {
-        Alert.alert('Playback failed', 'Could not play this message aloud.');
+        if (speechAlertAllowedRef.current && appActiveRef.current) {
+          Alert.alert('Playback failed', 'Could not play this message aloud.');
+        }
       } finally {
         setIsSpeaking(false);
         setSpeakingMessageId(null);
@@ -422,10 +443,107 @@ export function ChatScreen() {
   }, [profile, refreshProfile, services.repositories.userProfile]);
 
   useEffect(() => {
+    const sub = subscribeSpeechOwner(() => {
+      if (!isCompanionSpeaking()) {
+        setIsSpeaking(false);
+        setSpeakingMessageId(null);
+      }
+    });
+    return sub;
+  }, []);
+
+  useEffect(() => {
+    const resetTransientTalkState = (reason: 'background' | 'foreground') => {
+      speechAlertAllowedRef.current = false;
+      void stopCompanionSpeech();
+      setIsSpeaking(false);
+      setSpeakingMessageId(null);
+      const timedOut = recoverTimedOutTalkSend(sendGuardRef.current);
+      if (timedOut || (reason === 'foreground' && sendGuardRef.current.inFlight === false && isTypingRef.current)) {
+        setIsTyping(false);
+        setStreamingText(null);
+      }
+      const expired = clearExpiredTalkCooldowns(sendGuardRef.current);
+      if (
+        expired ||
+        isStaleTalkRateLimitBanner({
+          code: sendErrorCodeRef.current,
+          shownAt: sendErrorAtRef.current,
+        })
+      ) {
+        sendErrorCodeRef.current = null;
+        sendErrorAtRef.current = 0;
+        setError(null);
+      }
+      if (reason === 'foreground') {
+        pinTalkOnNextLayoutRef.current = true;
+      }
+    };
+
+    const onChange = (next: AppStateStatus) => {
+      const active = next === 'active';
+      const wasActive = appActiveRef.current;
+      appActiveRef.current = active;
+      if (!active) {
+        resetTransientTalkState('background');
+        return;
+      }
+      if (!wasActive && active) {
+        resetTransientTalkState('foreground');
+      }
+    };
+
+    const sub = AppState.addEventListener('change', onChange);
+    return () => sub.remove();
+  }, []);
+
+  const pinTalkToLatest = useCallback((reason: 'load' | 'send' | 'reply' | 'typing' | 'foreground') => {
+    if (
+      !shouldPinTalkToLatest({
+        userReadingHistory: userReadingHistoryRef.current,
+        reason,
+      })
+    ) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToEnd({ animated: reason !== 'load' && reason !== 'foreground' });
+    });
+  }, []);
+
+  useEffect(() => {
     if (messages.length === 0) return;
-    const timer = setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
-    return () => clearTimeout(timer);
-  }, [messages.length, isTyping]);
+    pinTalkToLatest(isTyping ? 'typing' : 'reply');
+  }, [messages.length, isTyping, pinTalkToLatest]);
+
+  useEffect(() => {
+    if (!isTyping && !error) return;
+    const timer = setInterval(() => {
+      if (recoverTimedOutTalkSend(sendGuardRef.current)) {
+        setIsTyping(false);
+        setStreamingText(null);
+        sendErrorCodeRef.current = 'request_timeout';
+        sendErrorAtRef.current = Date.now();
+        setError(new TalkAIError('request_timeout').userMessage);
+        setMessages((current) =>
+          current.map((item) =>
+            item.role === 'user' && item.status === 'pending' ? { ...item, status: 'failed' as const } : item,
+          ),
+        );
+      }
+      if (
+        isStaleTalkRateLimitBanner({
+          code: sendErrorCodeRef.current,
+          shownAt: sendErrorAtRef.current,
+        })
+      ) {
+        sendErrorCodeRef.current = null;
+        sendErrorAtRef.current = 0;
+        setError(null);
+      }
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [isTyping, error]);
 
   useEffect(() => {
     if (!isTyping || streamingText) return;
@@ -499,11 +617,19 @@ export function ChatScreen() {
     }, []),
   );
 
-  const sendMessage = async (attachments: PendingAttachmentInput[] = [], overrideText?: string) => {
+  const sendMessage = async (
+    attachments: PendingAttachmentInput[] = [],
+    overrideText?: string,
+    options?: { retryMessage?: ChatMessageView },
+  ) => {
     const sendTapAt = talkPerfNow();
-    const trimmed = (overrideText ?? input).trim();
+    const retryMessage = options?.retryMessage;
+    const trimmed = (overrideText ?? retryMessage?.text ?? input).trim();
     if (composerEdit && !emptyEditMaySend(trimmed) && attachments.length === 0) return;
     if ((!trimmed && attachments.length === 0) || !profile || !conversationId) return;
+
+    recoverTimedOutTalkSend(sendGuardRef.current);
+    clearExpiredTalkCooldowns(sendGuardRef.current);
 
     const fingerprintText = trimmed || `[attachment:${attachments.length}]`;
     const decision = beginTalkSend(sendGuardRef.current, {
@@ -514,45 +640,58 @@ export function ChatScreen() {
       if (decision.reason === 'in_flight' && overrideText?.trim()) {
         setInput((current) => (current.trim() ? current : overrideText.trim()));
       }
+      if (decision.reason === 'burst_cooldown') {
+        setError(new TalkAIError('rate_limited').userMessage);
+      }
       return;
     }
 
     sendEpochRef.current += 1;
+    userReadingHistoryRef.current = false;
+    pinTalkOnNextLayoutRef.current = true;
 
     const idsAtStart = new Set(messagesRef.current.map((item) => item.id));
     setComposerEdit(null);
-    setInput('');
+    if (!retryMessage) setInput('');
     setSuggestions([]);
     setSuggestionsDismissed(false);
     setIsTyping(true);
     setStreamingText(null);
     setThinkingStage(0);
     setError(null);
+    sendErrorCodeRef.current = null;
     void stopCompanionSpeech();
     setIsSpeaking(false);
     setSpeakingMessageId(null);
 
-    const optimisticId = createUuid();
-    const optimisticMessage: ChatMessageView = {
-      id: optimisticId,
-      role: 'user',
-      text: trimmed || (attachments.length ? 'Sent an attachment' : ''),
-      time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-      createdAt: new Date().toISOString(),
-      status: 'pending',
-      attachments: attachments.length
-        ? attachments.map((item, index) => ({
-            id: `pending-${index}`,
-            type: item.type,
-            localUri: item.localUri,
-            mimeType: item.mimeType,
-            fileName: item.fileName,
-            uploadStatus: 'uploading' as const,
-            createdAt: new Date().toISOString(),
-          }))
-        : undefined,
-    };
-    setMessages((current) => [...current, optimisticMessage]);
+    const optimisticId = retryMessage?.id ?? createUuid();
+    if (retryMessage) {
+      setMessages((current) =>
+        current.map((item) => (item.id === retryMessage.id ? { ...item, status: 'pending' } : item)),
+      );
+    } else {
+      const optimisticMessage: ChatMessageView = {
+        id: optimisticId,
+        role: 'user',
+        text: trimmed || (attachments.length ? 'Sent an attachment' : ''),
+        time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        createdAt: new Date().toISOString(),
+        status: 'pending',
+        attachments: attachments.length
+          ? attachments.map((item, index) => ({
+              id: `pending-${index}`,
+              type: item.type,
+              localUri: item.localUri,
+              mimeType: item.mimeType,
+              fileName: item.fileName,
+              uploadStatus: 'uploading' as const,
+              createdAt: new Date().toISOString(),
+            }))
+          : undefined,
+      };
+      setMessages((current) => [...current, optimisticMessage]);
+    }
+    pinTalkToLatest('send');
     talkPerf('local-ui', talkPerfNow() - sendTapAt);
     talkPerf('thinking', talkPerfNow() - sendTapAt);
     talkPerf('conversation-ready', 0);
@@ -569,7 +708,23 @@ export function ChatScreen() {
           mode: activeMode,
           attachments: attachments.length > 0 ? attachments : undefined,
           loadedProfile: profile,
-          recentHistory: chatViewsToHistory(messages, conversationId, activeMode),
+          recentHistory: chatViewsToHistory(
+            messagesRef.current.filter((item) => item.id !== optimisticId),
+            conversationId,
+            activeMode,
+          ),
+          existingUserMessage: retryMessage
+            ? {
+                id: retryMessage.id,
+                conversationId,
+                role: 'user',
+                content: trimmed,
+                mode: activeMode,
+                createdAt: retryMessage.createdAt,
+                status: 'pending',
+                attachments: retryMessage.attachments,
+              }
+            : undefined,
         },
         {
           onStreamChunk: (chunk) => setStreamingText((current) => (current ?? '') + chunk),
@@ -673,23 +828,29 @@ export function ChatScreen() {
         }
       }
     } catch (err) {
+      let persistedNewUserTurn = Boolean(retryMessage);
       if (!assistantVisible) {
-        setMessages((current) => current.filter((item) => item.id !== optimisticId));
-      }
-      let persistedNewUserTurn = false;
-      if (!assistantVisible && conversationId) {
         try {
           const reloaded = await companion.loadChatMessages(conversationId);
-          setMessages(reloaded);
-          persistedNewUserTurn = reloaded.some(
+          const persisted = reloaded.find(
             (item) =>
               item.role === 'user' &&
               item.text === trimmed &&
-              item.id !== optimisticId &&
-              !idsAtStart.has(item.id),
+              (item.id === optimisticId || retryMessage?.id === item.id || !idsAtStart.has(item.id)),
           );
+          persistedNewUserTurn = Boolean(persisted);
+          if (persisted) {
+            setMessages(
+              reloaded.map((item) => (item.id === persisted.id ? { ...item, status: 'failed' as const } : item)),
+            );
+          } else {
+            setMessages(reloaded.filter((item) => item.id !== optimisticId));
+          }
         } catch {
-          // Keep reload failure secondary to send error
+          setMessages((current) =>
+            current.map((item) => (item.id === optimisticId ? { ...item, status: 'failed' as const } : item)),
+          );
+          persistedNewUserTurn = true;
         }
       }
       setInput((current) =>
@@ -700,6 +861,14 @@ export function ChatScreen() {
         }),
       );
       logFeature('chat.send', 'failure', err instanceof Error ? err.message : 'send failed', Date.now() - started);
+      if (err instanceof TalkAIError && err.code === 'rate_limited') {
+        noteBurstRateLimit(sendGuardRef.current);
+        sendErrorCodeRef.current = 'rate_limited';
+        sendErrorAtRef.current = Date.now();
+      } else {
+        sendErrorCodeRef.current = err instanceof TalkAIError ? err.code : 'gateway_error';
+        sendErrorAtRef.current = Date.now();
+      }
       if (err instanceof FeatureLimitError && isPaywallEnabled()) {
         trackEvent('free_limit_reached', { feature: err.feature });
         void services.subscriptionAnalytics.track('free_limit_reached', { feature: err.feature });
@@ -929,8 +1098,7 @@ export function ChatScreen() {
     async (message: ChatMessageView) => {
       const text = userMessageSendText(message);
       if (!text) return;
-      setMessages((current) => current.filter((m) => m.id !== message.id));
-      await sendMessage([], text);
+      await sendMessage([], text, { retryMessage: message });
     },
     [sendMessage],
   );
@@ -1113,10 +1281,10 @@ export function ChatScreen() {
     );
   }
 
-  if (error && messages.length === 0) {
+  if (loadError && messages.length === 0) {
     return (
       <ScreenShell padded={false} glow="none" safeBottom={false}>
-        <ErrorState message={error} onRetry={() => loadChat(true)} />
+        <ErrorState message={loadError} onRetry={() => loadChat(true)} />
       </ScreenShell>
     );
   }
@@ -1206,14 +1374,24 @@ export function ChatScreen() {
         {error ? (
           <Pressable
             style={styles.inlineError}
-            onPress={() => setError(null)}
+            onPress={() => {
+              const canRetry = sendErrorCodeRef.current !== 'rate_limited' && sendErrorCodeRef.current !== 'usage_limited';
+              setError(null);
+              sendErrorCodeRef.current = canRetry ? sendErrorCodeRef.current : null;
+              if (!canRetry) {
+                sendErrorCodeRef.current = null;
+                return;
+              }
+              const failed = [...messagesRef.current].reverse().find((item) => item.role === 'user' && item.status === 'failed');
+              if (failed) void handleRetrySend(failed);
+            }}
             accessibilityRole="button"
-            accessibilityLabel="Dismiss send error">
+            accessibilityLabel="Retry failed send">
             <VoxaText variant="caption" color="textSecondary">
               {error}
             </VoxaText>
             <VoxaText variant="caption" color="primarySoft">
-              Tap to dismiss
+              {messages.some((item) => item.status === 'failed') ? 'Tap to retry' : 'Tap to dismiss'}
             </VoxaText>
           </Pressable>
         ) : null}
@@ -1267,6 +1445,22 @@ export function ChatScreen() {
           maxToRenderPerBatch={10}
           updateCellsBatchingPeriod={50}
           windowSize={7}
+          onContentSizeChange={() => {
+            if (pinTalkOnNextLayoutRef.current) {
+              pinTalkOnNextLayoutRef.current = false;
+              pinTalkToLatest('load');
+            }
+          }}
+          onScroll={(event: NativeSyntheticEvent<NativeScrollEvent>) => {
+            const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+            const nearBottom = isTalkListNearBottom({
+              contentOffsetY: contentOffset.y,
+              contentHeight: contentSize.height,
+              layoutHeight: layoutMeasurement.height,
+            });
+            userReadingHistoryRef.current = !nearBottom;
+          }}
+          scrollEventThrottle={16}
           onScrollToIndexFailed={(info) => {
             setTimeout(() => listRef.current?.scrollToIndex({ index: info.index, animated: true }), 200);
           }}

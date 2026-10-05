@@ -178,6 +178,8 @@ export class ActionIntentParser {
     const titleMatch =
       text.match(/remind me to (.+?)(?:\s+at\s+|\s+by\s+|\s+on\s+|\s+\d)/i) ??
       text.match(/remind me to (.+)/i) ??
+      text.match(/remind me (?:at|@)\s+.+?\s+to\s+(.+)/i) ??
+      text.match(/remind me in\s+.+?\s+to\s+(.+)/i) ??
       text.match(/(?:set|schedule) a reminder(?: to| for)? (.+?)(?:\s+at\s+|\s+\d)/i) ??
       text.match(/(?:set|schedule) a reminder(?: to| for)? (.+)/i);
 
@@ -265,6 +267,14 @@ export class ActionIntentParser {
 function parseTimeFromText(text: string): Date | null {
   const lower = text.toLowerCase();
   const now = new Date();
+
+  const inMinutes = lower.match(/\bin\s+(\d+)\s*(minutes?|mins?|minute)\b/i);
+  if (inMinutes) {
+    const minutes = Number(inMinutes[1]);
+    if (minutes > 0 && minutes <= 24 * 60) {
+      return new Date(now.getTime() + minutes * 60_000);
+    }
+  }
 
   const twelveHour = lower.match(/\b(at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
   if (twelveHour) {

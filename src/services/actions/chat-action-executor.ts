@@ -1,10 +1,13 @@
 import { getCompanionMode } from '../../constants/companion-modes';
 import { isFeatureVisible } from '../../config/feature-status';
-import { CompanionModeId, CreateMemoryInput, CreateReminderInput, Reminder } from '../../types';
+import { CompanionModeId, CreateMemoryInput, CreateReminderInput } from '../../types';
 import { canStartLiveVoice, liveVoiceUnavailableMessage } from '../../utils/voice-navigation';
 import { IStorageService, VoxaRepositories } from '../contracts';
 import { formatReminderTime } from '../../utils/reminders';
-import { notificationService } from '../notifications/notification-service';
+import {
+  reminderScheduleConfirmation,
+  scheduleLocalReminderIfAllowed,
+} from '../notifications/schedule-local-reminder';
 import { getRoutineCoachService } from '../routine/routine-coach-service';
 import { formatTime12Hour } from '../../utils/time-parse';
 import {
@@ -92,13 +95,12 @@ export class ChatActionExecutor {
     };
 
     const reminder = await this.repositories.reminders.createReminder(input);
-    await this.scheduleNotificationForReminder(reminder);
+    const scheduled = await scheduleLocalReminderIfAllowed(reminder);
+    if (scheduled.ok) {
+      await this.repositories.reminders.updateReminder(reminder.id, { notificationId: scheduled.notificationId });
+    }
     const when = formatReminderTime(intent.scheduledAt.toISOString());
-
-    return {
-      success: true,
-      confirmationMessage: `Done — I'll remind you to ${intent.title.toLowerCase()} at ${when}.`,
-    };
+    return reminderScheduleConfirmation({ title: intent.title, when, scheduled });
   }
 
   private async executeCreateGoal(
@@ -259,14 +261,5 @@ export class ChatActionExecutor {
       success: true,
       confirmationMessage: `Saved — I'll remember that ${intent.content.toLowerCase().replace(/\.$/, '')}.`,
     };
-  }
-
-  private async scheduleNotificationForReminder(reminder: Reminder) {
-    try {
-      const notificationId = await notificationService.scheduleReminderFromEntity(reminder);
-      await this.repositories.reminders.updateReminder(reminder.id, { notificationId });
-    } catch (error) {
-      console.warn('[Voxa] Failed to schedule reminder notification.', error);
-    }
   }
 }

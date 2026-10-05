@@ -1,6 +1,7 @@
 import { createUuid } from '../../types';
 import { getSupabaseAnonKey, hasSupabaseConfig } from '../../config/env';
 import { getTtsGatewayUrlFromEnv } from '../../config/tts-gateway-env';
+import { fetchWithTimeout } from '../../utils/fetch-with-timeout';
 import { clearGatewayAccessTokenCache } from '../ai/ai-gateway-client';
 import { isGatewayAuthFailure } from '../ai/ai-gateway-auth';
 import { getSupabaseClient } from '../supabase/client';
@@ -97,7 +98,7 @@ async function postTts(
   }
 
   const idempotencyKey = request.idempotencyKey?.trim() || createUuid();
-  const response = await fetch(gatewayUrl, {
+  const response = await fetchWithTimeout(gatewayUrl, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,

@@ -1,7 +1,7 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useCallback, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet } from 'react-native';
+import { Alert, ScrollView, StyleSheet } from 'react-native';
 
 import { GlassCard } from '../components/ui/glass-card';
 import { ScreenShell } from '../components/ui/screen-shell';
@@ -33,9 +33,13 @@ export function CompanionChallengesScreen({ navigation }: Props) {
 
   const start = async (templateId: typeof CHALLENGE_TEMPLATES[0]['id']) => {
     if (!profile) return;
-    await svc.start(profile.id, templateId);
-    Alert.alert('Challenge started', 'Voxa will encourage you — but you do the work.');
-    void load();
+    try {
+      await svc.start(profile.id, templateId);
+      Alert.alert('Challenge started', 'Voxa will encourage you — but you do the work.');
+      void load();
+    } catch (err) {
+      Alert.alert('Could not start', err instanceof Error ? err.message : 'Try that template again.');
+    }
   };
 
   const completeToday = async () => {
@@ -73,6 +77,19 @@ export function CompanionChallengesScreen({ navigation }: Props) {
               {active.completedDays}/{active.durationDays} days · streak {active.currentStreak} · {active.adherencePercent}%
             </VoxaText>
             <PremiumButton label="Complete today" onPress={() => void completeToday()} />
+            {active.status === 'paused' ? (
+              <PremiumButton
+                label="Resume"
+                variant="ghost"
+                onPress={() => active && profile && void svc.resume(profile.id, active.id).then(load)}
+              />
+            ) : (
+              <PremiumButton
+                label="Pause"
+                variant="ghost"
+                onPress={() => active && profile && void svc.pause(profile.id, active.id).then(load)}
+              />
+            )}
             <PremiumButton
               label="Skip today"
               variant="ghost"
@@ -89,16 +106,17 @@ export function CompanionChallengesScreen({ navigation }: Props) {
               />
             </GlassCard>
             {CHALLENGE_TEMPLATES.slice(0, 6).map((t) => (
-              <Pressable key={t.id} onPress={() => void start(t.id)}>
-                <GlassCard style={styles.templateCard}>
-                  <VoxaText variant="subtitle" style={styles.title}>
-                    {t.title}
-                  </VoxaText>
-                  <VoxaText variant="caption" color="textMuted" style={styles.meta}>
-                    {t.days} days · {t.target}
-                  </VoxaText>
-                </GlassCard>
-              </Pressable>
+              <GlassCard
+                key={t.id}
+                style={styles.templateCard}
+                onPress={() => void start(t.id)}>
+                <VoxaText variant="subtitle" style={styles.title}>
+                  {t.title}
+                </VoxaText>
+                <VoxaText variant="caption" color="textMuted" style={styles.meta}>
+                  {t.days} days · {t.target}
+                </VoxaText>
+              </GlassCard>
             ))}
           </>
         )}
