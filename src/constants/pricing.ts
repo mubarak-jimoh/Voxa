@@ -57,8 +57,8 @@ export const PRICING_CONFIG = {
 const PRO_FAIR_USE = 500;
 
 export const FREE_PLAN_LIMITS: PlanLimits = {
-  aiMessagesDaily: 20,
-  aiMessagesMonthly: 200,
+  aiMessagesDaily: 150,
+  aiMessagesMonthly: 3000,
   voiceMinutesDaily: 5,
   voiceMinutesMonthly: 30,
   imageUploadsDaily: 2,

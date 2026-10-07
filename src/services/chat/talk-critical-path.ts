@@ -32,6 +32,7 @@ export function buildLocalTalkMessage(input: {
   content: string;
   mode: CompanionModeId;
   attachments?: Message['attachments'];
+  metadata?: Message['metadata'];
 }): Message {
   return {
     id: input.id,
@@ -42,5 +43,6 @@ export function buildLocalTalkMessage(input: {
     createdAt: nowIso(),
     status: 'sent',
     attachments: input.attachments,
+    metadata: input.metadata,
   };
 }

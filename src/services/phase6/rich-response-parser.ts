@@ -32,13 +32,10 @@ export function parseRichResponse(text: string, memoryTitles: string[] = []): Ri
     blocks.push({ id: createUuid(), kind: 'caution', body: cautionLine });
   }
 
-  if (text.length > 280 && blocks.length === 0) {
-    const firstPara = text.split('\n\n')[0]?.slice(0, 200);
-    if (firstPara) blocks.push({ id: createUuid(), kind: 'summary', body: firstPara });
-  }
+  // Do not auto-attach a Summary card that repeats the visible reply.
 
-  if (/step\s*1|first,|then,|next,/i.test(text) && checklistItems.length === 0) {
-    const steps = lines.filter((l) => l.length > 10).slice(0, 5);
+  if (/\bstep\s*1\b/i.test(text) && checklistItems.length === 0) {
+    const steps = lines.filter((l) => /^\s*step\s*\d/i.test(l) && l.length > 10).slice(0, 5);
     if (steps.length >= 2) blocks.push({ id: createUuid(), kind: 'steps', title: 'Plan', items: steps });
   }
 

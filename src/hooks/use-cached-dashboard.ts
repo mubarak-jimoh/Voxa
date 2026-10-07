@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { HomeDashboardData } from '../services/voxa-companion-service';
 import { recordDashboardCacheHit, recordDashboardCacheMiss } from '../utils/performance-metrics';
@@ -24,6 +24,18 @@ export function useCachedDashboard(
   );
   const [isLoading, setIsLoading] = useState(!dashboard);
   const inflight = useRef<Promise<HomeDashboardData> | null>(null);
+
+  useEffect(() => {
+    if (!userId) {
+      setDashboard(null);
+      return;
+    }
+    if (globalCache?.userId && globalCache.userId !== userId) {
+      globalCache = null;
+      setDashboard(null);
+      setIsLoading(true);
+    }
+  }, [userId]);
 
   const load = useCallback(
     async (force = false) => {

@@ -260,7 +260,7 @@ export function resolveReferenceFromHistory(userMessage: string, history: Messag
 
   const recentContext = history
     .slice(-6)
-    .map((item) => `${item.role === 'user' ? 'User' : 'Voxa'}: ${item.content.slice(0, 160)}`)
+    .map((item) => `${item.role === 'user' ? 'User' : 'Voxa'}: ${String(item.content ?? '').slice(0, 160)}`)
     .join('\n');
 
   if (REFERENCE_PHRASE.test(lower) || lower.length < 60) {

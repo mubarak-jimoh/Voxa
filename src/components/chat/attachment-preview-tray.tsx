@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { colors, radius, spacing } from '../../constants/theme';
+import { pendingAttachmentPreviewLabel } from '../../services/chat/pending-attachment-preview';
 import { PendingAttachmentInput } from '../../types';
 import { VoxaText } from '../ui/voxa-text';
 import { VoiceNoteWaveform } from './voice-note-waveform';
@@ -28,7 +29,10 @@ export function AttachmentPreviewTray({ attachments, onRemove }: AttachmentPrevi
       contentContainerStyle={styles.tray}
       style={styles.container}>
       {attachments.map((item, index) => (
-        <View key={`${item.localUri}-${index}`} style={[styles.chip, item.type === 'audio' && styles.audioChip]}>
+        <View
+          key={`${item.localUri}-${index}`}
+          style={[styles.chip, item.type === 'audio' && styles.audioChip]}
+          accessibilityLabel={pendingAttachmentPreviewLabel(item)}>
           {item.type === 'image' || item.thumbnailUri ? (
             <Image source={{ uri: item.thumbnailUri ?? item.localUri }} style={styles.thumb} />
           ) : item.type === 'audio' ? (
@@ -49,9 +53,14 @@ export function AttachmentPreviewTray({ attachments, onRemove }: AttachmentPrevi
             </View>
           )}
           <VoxaText variant="caption" color="textSecondary" numberOfLines={1} style={styles.label}>
-            {item.type === 'audio' ? 'Voice note ready' : item.fileName ?? item.type}
+            {pendingAttachmentPreviewLabel(item)}
           </VoxaText>
-          <Pressable onPress={() => onRemove(index)} style={styles.removeBtn} hitSlop={8}>
+          <Pressable
+            onPress={() => onRemove(index)}
+            style={styles.removeBtn}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel={`Remove ${pendingAttachmentPreviewLabel(item).toLowerCase()}`}>
             <Ionicons name="close-circle" size={18} color={colors.textMuted} />
           </Pressable>
         </View>

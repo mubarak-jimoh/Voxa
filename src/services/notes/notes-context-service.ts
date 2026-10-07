@@ -20,10 +20,14 @@ export function formatNotesForPrompt(notes: Note[]): string {
   if (!notes.length) return '';
   return [
     '## User-permitted notes (explicitly shared for conversations)',
-    ...notes.map(
-      (n) =>
-        `- ${n.title.trim() || 'Untitled'}: ${n.body.replace(/\s+/g, ' ').trim().slice(0, 220)}`,
-    ),
+    ...notes.map((n) => {
+      const title = (n.title ?? '').trim() || 'Untitled';
+      const body = String(n.body ?? '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 220);
+      return `- ${title}: ${body}`;
+    }),
     'Do not claim you read other private notes.',
   ].join('\n');
 }

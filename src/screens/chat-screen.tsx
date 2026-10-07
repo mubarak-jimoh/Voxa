@@ -36,6 +36,7 @@ import { ScreenShell } from '../components/ui/screen-shell';
 import { VoxaText } from '../components/ui/voxa-text';
 import { ChatEmptyState } from '../components/chat/chat-empty-state';
 import { ChatInputBar } from '../components/chat/chat-input-bar';
+import { TalkJumpToLatestButton } from '../components/chat/talk-jump-to-latest';
 import { ChatMessageBubble } from '../components/chat/chat-message-bubble';
 import { ChatToolsSheet } from '../components/chat/chat-tools-sheet';
 import {
@@ -54,8 +55,13 @@ import {
   isStaleTalkRateLimitBanner,
   noteBurstRateLimit,
   recoverTimedOutTalkSend,
+  resetTalkSendGuard,
 } from '../services/chat/talk-send-guard';
-import { isTalkListNearBottom, shouldPinTalkToLatest } from '../services/chat/talk-list-pin';
+import {
+  isTalkListNearBottom,
+  nextTalkJumpToLatestVisible,
+  shouldPinTalkToLatest,
+} from '../services/chat/talk-list-pin';
 import { composerTextAfterDraftRestore, composerTextAfterStarterPrefill } from '../services/chat/talk-starter-prefill';
 import { getCompanionMode } from '../constants/companion-modes';
 import {
@@ -74,7 +80,7 @@ import { MainTabParamList, RootStackParamList } from '../navigation/types';
 import { FeatureLimitError } from '../services/billing/subscription-service';
 import { getAIProviderInfo } from '../services/ai/create-ai-service';
 import { warmAiGateway } from '../services/ai/ai-gateway-client';
-import { formatTalkErrorForUser, TalkAIError } from '../services/ai/talk-ai-errors';
+import { formatTalkErrorForUser, TalkAIError, talkErrorRetryCanSucceed } from '../services/ai/talk-ai-errors';
 import { friendlyErrorMessage } from '../utils/friendly-error';
 import { toggleBookmark, listBookmarks, removeBookmark, ChatBookmark } from '../services/chat/chat-bookmarks-service';
 import {
@@ -90,7 +96,7 @@ import {
   speakCompanionReply,
   stopCompanionSpeech,
 } from '../services/voice/companion-speech-service';
-import { subscribeSpeechOwner } from '../services/voice/speech-playback-coordinator';
+import { getSharedTts, getSpeechOwner, subscribeSpeechOwner } from '../services/voice/speech-playback-coordinator';
 import { navigateToPaywall } from '../utils/paywall-navigation';
 import { recordChatLatency } from '../utils/chat-debug-state';
 import { logFeature } from '../utils/feature-logger';
@@ -121,6 +127,7 @@ import { MemoryPanel } from '../components/phase6/memory-panel';
 import { THINKING_STATUS_LABELS } from '../types/phase6-premium';
 import { buildMemoryPanel } from '../services/phase6/phase6-dashboard-service';
 import { getConversationDraftsService } from '../services/phase6/conversation-drafts-service';
+import { getPhotoMemoryService } from '../services/phase12/photo-memory-service';
 import { RichReplyPayload } from '../types/phase6-premium';
 
 function capSuggestions(items: string[], max = 3): string[] {
@@ -188,7 +195,7 @@ export function ChatScreen() {
   const [contextCards, setContextCards] = useState<ContextCard[]>([]);
   const [smartActions, setSmartActions] = useState<SmartChatAction[]>([]);
   const [canvas, setCanvas] = useState<ConversationCanvas | null>(null);
-  const [canvasExpanded, setCanvasExpanded] = useState(false);
+  const [canvasExpanded, setCanvasExpanded] = useState(true);
   const [livingCompanion, setLivingCompanion] = useState<LivingCompanionState | null>(null);
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
@@ -219,6 +226,8 @@ export function ChatScreen() {
   const sendGuardRef = useRef(createTalkSendGuard());
   const thinkingStageInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const userReadingHistoryRef = useRef(false);
+  const showJumpToLatestRef = useRef(false);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const pinTalkOnNextLayoutRef = useRef(true);
   const sendErrorCodeRef = useRef<string | null>(null);
   const sendErrorAtRef = useRef(0);
@@ -234,6 +243,31 @@ export function ChatScreen() {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    sendGuardRef.current = resetTalkSendGuard(sendGuardRef.current);
+    sendErrorCodeRef.current = null;
+    sendErrorAtRef.current = 0;
+    setError(null);
+    setIsTyping(false);
+    setStreamingText(null);
+    speechAlertAllowedRef.current = false;
+    void stopCompanionSpeech();
+    setIsSpeaking(false);
+    setSpeakingMessageId(null);
+    setCanvasExpanded(true);
+  }, [profile?.id]);
+
+  useEffect(() => {
+    if (!isSpeaking) return;
+    const timer = setInterval(() => {
+      if (getSpeechOwner() === 'idle' && !getSharedTts().isSpeaking()) {
+        setIsSpeaking(false);
+        setSpeakingMessageId(null);
+      }
+    }, 400);
+    return () => clearInterval(timer);
+  }, [isSpeaking]);
 
   useEffect(() => {
     if (!thinkingStageInterval.current && isTyping) {
@@ -444,7 +478,7 @@ export function ChatScreen() {
 
   useEffect(() => {
     const sub = subscribeSpeechOwner(() => {
-      if (!isCompanionSpeaking()) {
+      if (getSpeechOwner() === 'idle' && !getSharedTts().isSpeaking()) {
         setIsSpeaking(false);
         setSpeakingMessageId(null);
       }
@@ -506,8 +540,19 @@ export function ChatScreen() {
     ) {
       return;
     }
+    showJumpToLatestRef.current = false;
+    setShowJumpToLatest(false);
     requestAnimationFrame(() => {
       listRef.current?.scrollToEnd({ animated: reason !== 'load' && reason !== 'foreground' });
+    });
+  }, []);
+
+  const jumpToLatest = useCallback(() => {
+    userReadingHistoryRef.current = false;
+    showJumpToLatestRef.current = false;
+    setShowJumpToLatest(false);
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToEnd({ animated: true });
     });
   }, []);
 
@@ -625,8 +670,8 @@ export function ChatScreen() {
     const sendTapAt = talkPerfNow();
     const retryMessage = options?.retryMessage;
     const trimmed = (overrideText ?? retryMessage?.text ?? input).trim();
-    if (composerEdit && !emptyEditMaySend(trimmed) && attachments.length === 0) return;
-    if ((!trimmed && attachments.length === 0) || !profile || !conversationId) return;
+    if (composerEdit && !emptyEditMaySend(trimmed) && attachments.length === 0) return false;
+    if ((!trimmed && attachments.length === 0) || !profile || !conversationId) return false;
 
     recoverTimedOutTalkSend(sendGuardRef.current);
     clearExpiredTalkCooldowns(sendGuardRef.current);
@@ -635,6 +680,7 @@ export function ChatScreen() {
     const decision = beginTalkSend(sendGuardRef.current, {
       text: fingerprintText,
       conversationId,
+      isRetry: Boolean(retryMessage),
     });
     if (!decision.accepted) {
       if (decision.reason === 'in_flight' && overrideText?.trim()) {
@@ -643,11 +689,13 @@ export function ChatScreen() {
       if (decision.reason === 'burst_cooldown') {
         setError(new TalkAIError('rate_limited').userMessage);
       }
-      return;
+      return false;
     }
 
     sendEpochRef.current += 1;
     userReadingHistoryRef.current = false;
+    showJumpToLatestRef.current = false;
+    setShowJumpToLatest(false);
     pinTalkOnNextLayoutRef.current = true;
 
     const idsAtStart = new Set(messagesRef.current.map((item) => item.id));
@@ -884,6 +932,7 @@ export function ChatScreen() {
       setIsTyping(false);
       setStreamingText(null);
     }
+    return true;
   };
 
   const retryAttachmentUpload = useCallback(
@@ -970,6 +1019,7 @@ export function ChatScreen() {
     async (message: ChatMessageView) => {
       if (!profile) return;
       if (isCompanionSpeaking() && speakingMessageId === message.id) {
+        speechAlertAllowedRef.current = false;
         await stopCompanionSpeech();
         setIsSpeaking(false);
         setSpeakingMessageId(null);
@@ -1134,7 +1184,18 @@ export function ChatScreen() {
         message.text?.trim() ??
         'A meaningful photo moment';
       try {
-        await services.repositories.memories.createMemory({
+        const localUri = image?.localUri;
+        const remoteUrl = image?.remoteUrl;
+        const photos = getPhotoMemoryService(services.storage);
+        const existing = await photos.findExisting(profile.id, {
+          localUri,
+          remoteUrl,
+        });
+        if (existing) {
+          Alert.alert('Saved', 'Photo memory added to Journey.');
+          return;
+        }
+        const memory = await services.repositories.memories.createMemory({
           userId: profile.id,
           category: 'moments',
           title: 'Photo memory',
@@ -1146,12 +1207,29 @@ export function ChatScreen() {
           relatedMode: activeMode,
           occurredAt: new Date().toISOString(),
         });
+        if (localUri || remoteUrl) {
+          await photos.create(profile.id, {
+            title: 'Photo memory',
+            caption: summary,
+            localUri,
+            remoteUrl,
+            thumbnailUri: image?.thumbnailUri,
+            occurredAt: memory.occurredAt ?? new Date().toISOString(),
+            category: 'everyday',
+            people: [],
+            isPrivate: false,
+            pinned: false,
+            favourite: false,
+            analysisSummary: image?.analysisSummary,
+            memoryId: memory.id,
+          });
+        }
         Alert.alert('Saved', 'Photo memory added to Journey.');
       } catch (err) {
         Alert.alert('Could not save', err instanceof Error ? err.message : 'Try again.');
       }
     },
-    [profile, services.repositories.memories, activeMode],
+    [profile, services.repositories.memories, services.storage, activeMode],
   );
 
   const searchResults = searchQuery.trim()
@@ -1324,6 +1402,7 @@ export function ChatScreen() {
                 hitSlop={8}
                 onPress={() => {
                   if (isSpeaking) {
+                    speechAlertAllowedRef.current = false;
                     void stopCompanionSpeech();
                     setIsSpeaking(false);
                     setSpeakingMessageId(null);
@@ -1375,7 +1454,7 @@ export function ChatScreen() {
           <Pressable
             style={styles.inlineError}
             onPress={() => {
-              const canRetry = sendErrorCodeRef.current !== 'rate_limited' && sendErrorCodeRef.current !== 'usage_limited';
+              const canRetry = talkErrorRetryCanSucceed(sendErrorCodeRef.current);
               setError(null);
               sendErrorCodeRef.current = canRetry ? sendErrorCodeRef.current : null;
               if (!canRetry) {
@@ -1391,32 +1470,39 @@ export function ChatScreen() {
               {error}
             </VoxaText>
             <VoxaText variant="caption" color="primarySoft">
-              {messages.some((item) => item.status === 'failed') ? 'Tap to retry' : 'Tap to dismiss'}
+              {talkErrorRetryCanSucceed(sendErrorCodeRef.current) &&
+              messages.some((item) => item.status === 'failed')
+                ? 'Tap to retry'
+                : 'Tap to dismiss'}
             </VoxaText>
           </Pressable>
         ) : null}
 
         {__DEV__ && !isTyping && contextCards.length > 0 ? (
-          <ContextCardsRow
-            cards={contextCards}
-            thinkingAbout={livingCompanion?.thinkingAbout}
-            onSelect={handleContextCard}
-          />
+          <View style={styles.contextStrip}>
+            <ContextCardsRow
+              cards={contextCards}
+              thinkingAbout={livingCompanion?.thinkingAbout}
+              onSelect={handleContextCard}
+            />
+          </View>
         ) : null}
 
         {__DEV__ && !isTyping && contextChips.length > 0 ? (
-          <ChatContextChips
-            chips={contextChips}
-            onSelect={(chip) => {
-              if (chip.kind === 'goal') void sendMessage([], `Let's talk about my goal: ${chip.label}`);
-              else if (chip.kind === 'memory') void sendMessage([], `Tell me more about "${chip.label}"`);
-              else if (chip.kind === 'routine') void sendMessage([], chip.label);
-              else void sendMessage([], chip.label);
-            }}
-          />
+          <View style={styles.contextStrip}>
+            <ChatContextChips
+              chips={contextChips}
+              onSelect={(chip) => {
+                if (chip.kind === 'goal') void sendMessage([], `Let's talk about my goal: ${chip.label}`);
+                else if (chip.kind === 'memory') void sendMessage([], `Tell me more about "${chip.label}"`);
+                else if (chip.kind === 'routine') void sendMessage([], chip.label);
+                else void sendMessage([], chip.label);
+              }}
+            />
+          </View>
         ) : null}
 
-        {__DEV__ && !isTyping && canvas ? (
+        {canvas && !isTyping ? (
           <ConversationCanvasCard
             canvas={canvas}
             expanded={canvasExpanded}
@@ -1432,63 +1518,77 @@ export function ChatScreen() {
           </View>
         ) : null}
 
-        <FlatList
-          ref={listRef}
-          data={messages}
-          keyExtractor={keyExtractor}
-          extraData={speakingMessageId ?? ''}
-          contentContainerStyle={styles.messages}
-          showsVerticalScrollIndicator={false}
-          renderItem={renderMessage}
-          removeClippedSubviews
-          initialNumToRender={12}
-          maxToRenderPerBatch={10}
-          updateCellsBatchingPeriod={50}
-          windowSize={7}
-          onContentSizeChange={() => {
-            if (pinTalkOnNextLayoutRef.current) {
-              pinTalkOnNextLayoutRef.current = false;
-              pinTalkToLatest('load');
+        <View style={styles.listWrap}>
+          <FlatList
+            ref={listRef}
+            data={messages}
+            keyExtractor={keyExtractor}
+            extraData={speakingMessageId ?? ''}
+            contentContainerStyle={styles.messages}
+            showsVerticalScrollIndicator={false}
+            keyboardDismissMode="interactive"
+            keyboardShouldPersistTaps="handled"
+            renderItem={renderMessage}
+            removeClippedSubviews
+            initialNumToRender={12}
+            maxToRenderPerBatch={10}
+            updateCellsBatchingPeriod={50}
+            windowSize={7}
+            onContentSizeChange={() => {
+              if (pinTalkOnNextLayoutRef.current) {
+                pinTalkOnNextLayoutRef.current = false;
+                pinTalkToLatest('load');
+              }
+            }}
+            onScroll={(event: NativeSyntheticEvent<NativeScrollEvent>) => {
+              const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+              const metrics = {
+                contentOffsetY: contentOffset.y,
+                contentHeight: contentSize.height,
+                layoutHeight: layoutMeasurement.height,
+              };
+              const nearBottom = isTalkListNearBottom(metrics);
+              userReadingHistoryRef.current = !nearBottom;
+              const nextVisible = nextTalkJumpToLatestVisible({
+                currentlyVisible: showJumpToLatestRef.current,
+                ...metrics,
+              });
+              if (nextVisible !== showJumpToLatestRef.current) {
+                showJumpToLatestRef.current = nextVisible;
+                setShowJumpToLatest(nextVisible);
+              }
+            }}
+            scrollEventThrottle={16}
+            onScrollToIndexFailed={(info) => {
+              setTimeout(() => listRef.current?.scrollToIndex({ index: info.index, animated: true }), 200);
+            }}
+            ListEmptyComponent={
+              !isTyping ? (
+                <ChatEmptyState
+                  voxaName={voxaName}
+                  tint={voxaTint}
+                  greeting={chatEmptyGreeting}
+                  emotionalLine={chatEmptyLine}
+                  orbMood={orbMood}
+                  orbState={orbState}
+                  starters={messages.length === 0 ? capSuggestions(quickPrompts, 3) : []}
+                  onSelectStarter={(text) => void sendMessage([], text)}
+                />
+              ) : null
             }
-          }}
-          onScroll={(event: NativeSyntheticEvent<NativeScrollEvent>) => {
-            const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-            const nearBottom = isTalkListNearBottom({
-              contentOffsetY: contentOffset.y,
-              contentHeight: contentSize.height,
-              layoutHeight: layoutMeasurement.height,
-            });
-            userReadingHistoryRef.current = !nearBottom;
-          }}
-          scrollEventThrottle={16}
-          onScrollToIndexFailed={(info) => {
-            setTimeout(() => listRef.current?.scrollToIndex({ index: info.index, animated: true }), 200);
-          }}
-          ListEmptyComponent={
-            !isTyping ? (
-              <ChatEmptyState
-                voxaName={voxaName}
-                tint={voxaTint}
-                greeting={chatEmptyGreeting}
-                emotionalLine={chatEmptyLine}
-                orbMood={orbMood}
-                orbState={orbState}
-                starters={messages.length === 0 ? capSuggestions(quickPrompts, 3) : []}
-                onSelectStarter={(text) => void sendMessage([], text)}
-              />
-            ) : null
-          }
-          ListFooterComponent={
-            isTyping ? (
-              <TypingIndicator
-                voxaName={voxaName}
-                tint={voxaTint}
-                streamingText={streamingText}
-                thinkingLabel={THINKING_STATUS_LABELS[thinkingStage]}
-              />
-            ) : null
-          }
-        />
+            ListFooterComponent={
+              isTyping ? (
+                <TypingIndicator
+                  voxaName={voxaName}
+                  tint={voxaTint}
+                  streamingText={streamingText}
+                  thinkingLabel={THINKING_STATUS_LABELS[thinkingStage]}
+                />
+              ) : null
+            }
+          />
+          <TalkJumpToLatestButton visible={showJumpToLatest && messages.length > 0} onPress={jumpToLatest} />
+        </View>
 
         {!isTyping &&
         !suggestionsDismissed &&
@@ -1517,6 +1617,7 @@ export function ChatScreen() {
         ) : null}
 
         <ChatInputBar
+          key={profile?.id ?? 'anon'}
           value={input}
           onChangeText={(text) => {
             setInput(text);
@@ -1525,8 +1626,8 @@ export function ChatScreen() {
               setSuggestionsDismissed(true);
             }
           }}
-          onSend={(attachments) => void sendMessage(attachments)}
-          disabled={isTyping}
+          onSend={(attachments) => sendMessage(attachments)}
+          disabled={false}
           voxaName={voxaName}
           editing={Boolean(composerEdit)}
           onCancelEdit={handleCancelEdit}
@@ -1692,7 +1793,14 @@ const styles = StyleSheet.create({
   contextThought: {
     paddingHorizontal: layout.screenPadding,
     paddingBottom: spacing.xs,
+    flexGrow: 0,
+    flexShrink: 0,
   },
+  contextStrip: {
+    flexGrow: 0,
+    flexShrink: 0,
+  },
+  listWrap: { flex: 1 },
   messages: {
     paddingHorizontal: layout.screenPadding,
     paddingTop: spacing.md,

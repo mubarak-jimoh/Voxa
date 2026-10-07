@@ -6,7 +6,8 @@ import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-n
 import { Ionicons } from '@expo/vector-icons';
 
 import { isFeatureVisible } from '../config/feature-status';
-import { FadeIn, EmptyState, LoadingPulse, SkeletonBlock, StaggerFade } from '../components/premium/premium-ui';
+import { FadeIn, EmptyState, StaggerFade } from '../components/premium/premium-ui';
+import { BootLoadingScreen } from '../components/ui/boot-loading-screen';
 import { HomeHeroSection } from '../components/phase6/home-hero-section';
 import { HomeMorningBriefCard } from '../components/home/home-morning-brief-card';
 import { ScreenShell } from '../components/ui/screen-shell';
@@ -268,16 +269,7 @@ export function HomeScreen({ navigation }: Props) {
   }, [invalidate, load]);
 
   if (isLoading && !dashboard) {
-    return (
-      <ScreenShell padded={false} safeBottom={false}>
-        <View style={styles.skeletonWrap}>
-          <LoadingPulse label="Waking up Voxa..." />
-          <SkeletonBlock height={220} style={styles.skeletonCard} />
-          <SkeletonBlock height={96} style={styles.skeletonCard} />
-          <SkeletonBlock height={120} style={styles.skeletonCard} />
-        </View>
-      </ScreenShell>
-    );
+    return <BootLoadingScreen />;
   }
 
   if (loadError && !dashboard) {

@@ -91,6 +91,10 @@ export function checkUsageAllowance(input: {
   return { allowed: true, plan };
 }
 
+/** V1 free Talk allowance — enforced via entitlement_limits, not by making the gateway unlimited. */
+export const FREE_V1_AI_MESSAGES_DAILY = 150;
+export const FREE_V1_AI_MESSAGES_MONTHLY = 3000;
+
 export const ABUSE_LIMITS = {
   maxUserMessageChars: 4_000,
   maxContextPayloadChars: 24_000,

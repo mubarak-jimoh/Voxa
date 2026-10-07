@@ -110,6 +110,10 @@ export type GenerateReplyInput = {
   contextModules?: string[];
   /** Base64 data URL or remote URL for vision. */
   imageUrlForVision?: string;
+  /** True when this turn needs hosted web search on the gateway. */
+  liveSearch?: boolean;
+  /** Named city from the user question — never a guessed location. */
+  liveSearchLocationLabel?: string;
   imageAnalysisSummary?: string;
 };
 
@@ -122,6 +126,7 @@ export type GenerateCheckInInput = {
 
 export type GenerateReplyResult = {
   content: string;
+  sourceLine?: string;
   suggestedMemory?: Pick<CreateMemoryInput, 'category' | 'title' | 'content' | 'mood' | 'relatedMode'>;
 };
 

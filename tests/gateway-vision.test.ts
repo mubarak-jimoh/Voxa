@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 import { AI_GATEWAY_BUDGETS } from '../src/config/ai-gateway-budgets';
@@ -13,6 +14,11 @@ import { GenerateReplyInput } from '../src/services/contracts';
 import { createDefaultCompanionIdentity } from '../src/constants/companion-identity';
 import { createDefaultSubscription } from '../src/types/subscription';
 import { Message, UserProfile } from '../src/types';
+import {
+  lastLocalImageUriFromHistory,
+  messageRefersToAttachedPhoto,
+  resolveImageUrlForVision,
+} from '../src/services/ai/vision-follow-up';
 import {
   ABUSE_LIMITS,
   textCharsFromContent,
@@ -99,11 +105,12 @@ describe('gateway vision multimodal', () => {
     assert.equal(content[0]?.type, 'text');
     const text = content[0] && content[0].type === 'text' ? content[0].text : '';
     assert.ok(text.startsWith('Describe this'));
-    assert.ok(text.includes(IMAGE_TURN_VISION_INSTRUCTION));
-    assert.ok(
-      /do not claim that you cannot see/i.test(text),
-      'instruction should forbid cannot-see claims',
-    );
+    assert.match(text, new RegExp(IMAGE_TURN_VISION_INSTRUCTION.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.doesNotMatch(text, /If the image is unclear/i);
+    assert.doesNotMatch(text, /cannot identify/i);
+    assert.doesNotMatch(text, /can't identify/i);
+    assert.doesNotMatch(text, /do not claim that you cannot see/i);
+    assert.doesNotMatch(text, /\[Photo shared\]/);
     assert.equal(content[1]?.type, 'image_url');
     assert.equal(
       content[1] && content[1].type === 'image_url' ? content[1].image_url.url : '',
@@ -118,7 +125,7 @@ describe('gateway vision multimodal', () => {
     assert.ok(Array.isArray(content));
     const text = content[0] && content[0].type === 'text' ? content[0].text : '';
     assert.ok(text.startsWith('What do you see in this image?'));
-    assert.ok(text.includes(IMAGE_TURN_VISION_INSTRUCTION));
+    assert.doesNotMatch(text, /If the image is unclear/i);
   });
 
   it('does not add the vision-availability instruction to ordinary text-only turns', () => {
@@ -133,6 +140,7 @@ describe('gateway vision multimodal', () => {
     assert.equal(content, 'Just chatting with no photo');
     assert.ok(!String(content).includes(IMAGE_TURN_VISION_INSTRUCTION));
     assert.ok(!String(content).includes('available for visual inspection'));
+    assert.ok(!String(content).includes('## Attached photo'));
   });
 
   it('keeps system and history text-only while only the current user turn is multimodal', () => {
@@ -149,6 +157,12 @@ describe('gateway vision multimodal', () => {
     }
     assert.equal(currentUser?.role, 'user');
     assert.ok(Array.isArray(currentUser?.content));
+    assert.match(String(system?.content), /## Attached photo/);
+    assert.match(String(system?.content), /Answer from that photo/);
+    assert.doesNotMatch(String(system?.content), /cannot see images/i);
+    assert.doesNotMatch(String(system?.content), /can't identify/i);
+    assert.doesNotMatch(String(system?.content), /cannot identify/i);
+    assert.doesNotMatch(String(system?.content), /do not claim that you cannot see/i);
   });
 
   it('does not count base64 image bytes toward text/context budgets', () => {
@@ -252,5 +266,113 @@ describe('gateway vision multimodal', () => {
     const expectedTextChars = `Hi\n\n${IMAGE_TURN_VISION_INSTRUCTION}`.length;
     assert.equal(diagnostics.currentUserMessageChars, expectedTextChars);
     assert.ok(diagnostics.requestBytes > expectedTextChars);
+  });
+});
+
+describe('vision follow-up after a sent photo', () => {
+  it('recognises the physical QA photo question', () => {
+    assert.equal(messageRefersToAttachedPhoto('What can you see in this photo?'), true);
+    assert.equal(messageRefersToAttachedPhoto('What do u see in this picture'), true);
+    assert.equal(messageRefersToAttachedPhoto('How was your day?'), false);
+  });
+
+  it('reuses the last local photo URI for a follow-up question and ignores https remotes', () => {
+    const history: Message[] = [
+      makeMessage(0, 'user', 'Sent an attachment'),
+      makeMessage(1, 'voxa', 'Got it'),
+    ];
+    history[0] = {
+      ...history[0],
+      attachments: [
+        {
+          id: 'att-1',
+          type: 'image',
+          localUri: 'file:///cache/photo.jpg',
+          remoteUrl: 'https://example.com/x.jpg',
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+    };
+    assert.equal(lastLocalImageUriFromHistory(history), 'file:///cache/photo.jpg');
+    assert.equal(
+      resolveImageUrlForVision({
+        userMessage: 'What can you see in this photo?',
+        history,
+      }),
+      'file:///cache/photo.jpg',
+    );
+    assert.equal(
+      resolveImageUrlForVision({
+        currentTurnUri: 'file:///cache/newer.jpg',
+        userMessage: 'What can you see in this photo?',
+        history,
+      }),
+      'file:///cache/newer.jpg',
+    );
+    assert.equal(
+      resolveImageUrlForVision({
+        userMessage: 'What should I have for dinner?',
+        history,
+      }),
+      undefined,
+    );
+  });
+
+  it('wires follow-up vision into sendChatMessage after history is built', () => {
+    const companion = readFileSync('src/services/voxa-companion-service.ts', 'utf8');
+    assert.match(companion, /resolveImageUrlForVision/);
+    const processAt = companion.indexOf('imageUrlForVision = processed.imageUrlForVision');
+    const followAt = companion.indexOf('resolveImageUrlForVision({');
+    const aiAt = companion.lastIndexOf('imageUrlForVision,');
+    assert.ok(processAt > 0 && followAt > processAt && aiAt > followAt);
+  });
+});
+
+describe('same-turn vision payload', () => {
+  it('strips [Photo shared] and keeps one image_url for photo + question', () => {
+    const content = buildUserTurnContent(
+      makeInput({
+        userMessage: 'What do u see in this picture\n[Photo shared]',
+        imageUrlForVision: TINY_JPEG,
+      }),
+    );
+    assert.ok(Array.isArray(content));
+    const text = content[0] && content[0].type === 'text' ? content[0].text : '';
+    assert.match(text, /What do u see in this picture/);
+    assert.doesNotMatch(text, /\[Photo shared\]/);
+    assert.doesNotMatch(text, /Photo context:/);
+    assert.equal(content.filter((part) => part.type === 'image_url').length, 1);
+  });
+
+  it('does not inject photo analysis text when the image_url is present', () => {
+    const content = buildUserTurnContent(
+      makeInput({
+        userMessage: 'What can you see in this photo?',
+        imageUrlForVision: TINY_JPEG,
+        imageAnalysisSummary: 'someone by a pool with a nice view',
+      }),
+    );
+    assert.ok(Array.isArray(content));
+    const text = content[0] && content[0].type === 'text' ? content[0].text : '';
+    assert.doesNotMatch(text, /pool/);
+    assert.doesNotMatch(text, /Photo context:/);
+  });
+
+  it('does not add vision system copy to ordinary later text', () => {
+    const { messages } = buildBoundedGatewayChatMessages(
+      makeInput({
+        conversationHistory: [
+          makeMessage(0, 'user', 'photo earlier'),
+          makeMessage(1, 'voxa', 'Nice photo'),
+        ],
+        userMessage: 'What should I have for dinner?',
+        imageUrlForVision: undefined,
+      }),
+    );
+    const system = messages.find((m) => m.role === 'system');
+    const user = [...messages].reverse().find((m) => m.role === 'user');
+    assert.equal(typeof user?.content, 'string');
+    assert.equal(user?.content, 'What should I have for dinner?');
+    assert.doesNotMatch(String(system?.content), /## Attached photo/);
   });
 });

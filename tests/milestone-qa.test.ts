@@ -83,6 +83,27 @@ test('soft delete retains sibling notes and hides deleted', async () => {
   assert.equal(after.length, 2);
 });
 
+test('notes folders filter All vs folder and persist assignment', async () => {
+  resetNotesServiceForTests();
+  const storage = new MemoryStorage();
+  const service = new NotesService(storage);
+  const folder = await service.createFolder('u1', 'Python');
+  const inFolder = await service.create('u1', { title: 'Revise', folderId: folder.id });
+  const unfiled = await service.create('u1', { title: 'Inbox', folderId: null });
+
+  const all = await service.list('u1');
+  assert.equal(all.length, 2);
+  const python = await service.list('u1', { folderId: folder.id });
+  assert.equal(python.length, 1);
+  assert.equal(python[0]?.id, inFolder.id);
+  const moved = await service.update('u1', unfiled.id, { folderId: folder.id });
+  assert.equal(moved?.folderId, folder.id);
+  const pythonAfter = await service.list('u1', { folderId: folder.id });
+  assert.equal(pythonAfter.length, 2);
+  const otherUser = await service.list('u2', { folderId: folder.id });
+  assert.equal(otherUser.length, 0);
+});
+
 test('update latest write wins', async () => {
   resetNotesServiceForTests();
   const storage = new MemoryStorage();

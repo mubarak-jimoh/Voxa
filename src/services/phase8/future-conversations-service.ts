@@ -31,7 +31,7 @@ export class FutureConversationsService {
   async getDueToday(userId: EntityId): Promise<FutureConversation | null> {
     const today = new Date().toISOString().slice(0, 10);
     const items = await this.list(userId);
-    return items.find((f) => f.scheduledFor.slice(0, 10) <= today) ?? null;
+    return items.find((f) => (f.scheduledFor ?? '').slice(0, 10) <= today) ?? null;
   }
 
   async schedule(input: {

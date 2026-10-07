@@ -19,6 +19,7 @@ import { validateBillingEnvironment } from '../services/billing/billing-validati
 import { BillingLog } from '../services/billing/billing-logger';
 import { hasRevenueCatConfig } from '../config/revenuecat-env';
 import { friendlyErrorMessage } from '../utils/friendly-error';
+import { resetTransientSessionState } from '../services/session/reset-transient-session-state';
 
 const FOREGROUND_ENTITLEMENT_REFRESH_MIN_MS = 5_000;
 
@@ -62,8 +63,12 @@ export function VoxaProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
 
+  const presentedUiRef = useRef(false);
+
   const initialize = useCallback(async () => {
-    setIsLoading(true);
+    if (!presentedUiRef.current) {
+      setIsLoading(true);
+    }
     setError(null);
 
     try {
@@ -134,6 +139,7 @@ export function VoxaProvider({ children }: { children: ReactNode }) {
 
       setProfile(syncedProfile ?? currentProfile);
       setIsReady(true);
+      presentedUiRef.current = true;
       recordSyncSuccess();
 
       if (currentProfile.onboardingComplete) {
@@ -215,6 +221,10 @@ export function VoxaProvider({ children }: { children: ReactNode }) {
   }, [services.storage]);
 
   const signOutCleanup = useCallback(async () => {
+    presentedUiRef.current = false;
+    setIsLoading(true);
+    setIsReady(false);
+    resetTransientSessionState();
     try {
       if (profile?.id) {
         await services.billingService.signOut(profile.id);

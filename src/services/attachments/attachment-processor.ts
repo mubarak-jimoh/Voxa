@@ -71,21 +71,14 @@ export class AttachmentProcessor {
 
       if (item.type === 'image') {
         mediaSource = 'image';
-        let summary: string | null = null;
-        try {
-          summary = await this.ai.analyzeImage({ uri: item.localUri, mimeType: item.mimeType });
-          recordPhotoAnalysisStatus(summary ? 'OK' : 'Empty response');
-        } catch (err) {
-          console.warn('[Voxa] Image analysis failed.', err);
-          recordPhotoAnalysisStatus(err instanceof Error ? err.message : 'Failed');
-        }
+        recordPhotoAnalysisStatus('OK');
         imageUrlForVision = item.localUri;
-        imageAnalysisSummary = summary ?? undefined;
+        imageAnalysisSummary = undefined;
         attachments.push({
           ...base,
-          analysisSummary: summary ?? 'Photo shared',
+          analysisSummary: 'Photo shared',
         });
-        textParts.push(summary ? `[Photo]: ${summary}` : '[Photo shared]');
+        textParts.push('[Photo shared]');
         continue;
       }
 

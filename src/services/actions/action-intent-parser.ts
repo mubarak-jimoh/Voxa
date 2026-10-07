@@ -2,6 +2,7 @@ import { CHAT_COMPANION_MODE_IDS } from '../../constants/companion-modes';
 import { AssistantActionId } from '../../types';
 import { CompanionModeId, GoalCategory, MemoryCategory } from '../../types';
 import { parseFlexibleTimeInput } from '../../utils/time-parse';
+import { resolveRelativeReminderDelayMs } from './relative-reminder-time';
 
 export type ParsedSetReminderIntent = {
   action: 'set_reminder';
@@ -247,19 +248,11 @@ export class ActionIntentParser {
   }
 
   private parseAddMemory(text: string): ParsedAddMemoryIntent | null {
-    const match =
-      text.match(/remember that (.+)/i) ??
-      text.match(/remember (.+)/i) ??
-      text.match(/don't forget that (.+)/i) ??
-      text.match(/don\'t forget (.+)/i);
-
-    if (!match) return null;
     if (/remind me/i.test(text)) return null;
-
-    const content = match[1].trim().replace(/[.!?]+$/, '');
+    const content = extractRememberedFact(text);
+    if (!content) return null;
     const category = inferMemoryCategory(content);
     const title = buildMemoryTitle(content, category);
-
     return { action: 'add_memory', title, content, category };
   }
 }
@@ -268,12 +261,9 @@ function parseTimeFromText(text: string): Date | null {
   const lower = text.toLowerCase();
   const now = new Date();
 
-  const inMinutes = lower.match(/\bin\s+(\d+)\s*(minutes?|mins?|minute)\b/i);
-  if (inMinutes) {
-    const minutes = Number(inMinutes[1]);
-    if (minutes > 0 && minutes <= 24 * 60) {
-      return new Date(now.getTime() + minutes * 60_000);
-    }
+  const relativeMs = resolveRelativeReminderDelayMs(lower);
+  if (relativeMs != null) {
+    return new Date(now.getTime() + relativeMs);
   }
 
   const twelveHour = lower.match(/\b(at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
@@ -324,6 +314,36 @@ function inferGoalCategory(title: string): GoalCategory {
   if (/feel|stress|anxiety|mindful|journal/.test(lower)) return 'emotional';
   if (/productive|focus|habit|routine/.test(lower)) return 'productivity';
   return 'general';
+}
+
+const REMEMBER_CUE =
+  /\b(please )?(remember that|remember this|don't forget that|do not forget that|don't forget|do not forget)\b/gi;
+
+/** Fact to store from an explicit remember request. Never store a bare "that". */
+export function extractRememberedFact(message: string): string | undefined {
+  if (!/\b(remember (that|this)|don't forget|do not forget)\b/i.test(message)) return undefined;
+  const fact = message
+    .replace(REMEMBER_CUE, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^[.!?,\-–—]+/, '')
+    .replace(/[.!?]+$/g, '')
+    .trim();
+  if (fact.length < 4) return undefined;
+  if (/^(that|this|it)$/i.test(fact)) return undefined;
+  return fact;
+}
+
+export function formatMemorySavedConfirmation(content: string): string {
+  const fact = content
+    .trim()
+    .replace(/^[.!?,\-–—]+/, '')
+    .replace(/[.!?]+$/g, '')
+    .replace(/^(that|this)\s+/i, '')
+    .trim();
+  if (fact.length < 4 || /^(that|this|it)$/i.test(fact)) return "Saved — I'll remember that.";
+  const rest = fact.charAt(0).toLowerCase() + fact.slice(1);
+  return `Saved — I'll remember that ${rest}.`;
 }
 
 function inferMemoryCategory(content: string): MemoryCategory {

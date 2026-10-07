@@ -143,6 +143,37 @@ export class WeatherService {
     return this.preferenceService.save({ mode: 'declined', permissionPromptShown: true });
   }
 
+  async hasSavedLocation(): Promise<boolean> {
+    const preference = await this.preferenceService.get();
+    return this.preferenceService.hasResolvableLocation(preference);
+  }
+
+  async fetchForecastForPlace(query: string): Promise<WeatherFetchResult> {
+    const hit = await geocodeCity(query);
+    if (!hit) {
+      return {
+        ok: false,
+        reason: 'no_location',
+        message: 'Could not find that city.',
+      };
+    }
+    try {
+      const bundle = await this.provider.fetchForecast({
+        latitude: hit.latitude,
+        longitude: hit.longitude,
+        locationLabel: [hit.name, hit.admin1, hit.country].filter(Boolean).join(', '),
+      });
+      return { ok: true, data: bundle };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Weather unavailable';
+      return {
+        ok: false,
+        reason: message.toLowerCase().includes('network') ? 'offline' : 'provider_error',
+        message,
+      };
+    }
+  }
+
   async fetchForecast(options?: { force?: boolean }): Promise<WeatherFetchResult> {
     const preference = await this.preferenceService.get();
     if (preference.mode === 'declined') {

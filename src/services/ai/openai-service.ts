@@ -13,8 +13,9 @@ import {
 import { MEMORY_EXTRACTION_CATEGORIES } from '../../constants/memory-categories';
 import { extractMemoriesLocally } from '../memory/local-memory-extractor';
 import { buildVoxaSystemPrompt } from './voxa-system-prompt';
-import { mapConversationHistory } from './gateway-context-budget';
+import { IMAGE_TURN_VISION_INSTRUCTION, mapConversationHistory } from './gateway-context-budget';
 import { uriToVisionDataUrl } from './image-data-url';
+import { stripVisionPlaceholdersFromUserText } from './vision-follow-up';
 
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 const OPENAI_TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions';
@@ -335,6 +336,9 @@ export class OpenAIService implements IAIService {
       referencesRecentTurns: input.referencesRecentTurns,
       conversationState: input.conversationState,
       userMessage: input.userMessage,
+      hasAttachedImage: Boolean(input.imageUrlForVision),
+      liveSearch: input.liveSearch === true,
+      liveSearchLocationLabel: input.liveSearchLocationLabel,
     });
 
     const history = mapConversationHistory(input.conversationHistory);
@@ -348,19 +352,21 @@ export class OpenAIService implements IAIService {
 
   private async buildUserTurn(input: GenerateReplyInput): Promise<OpenAIChatMessage> {
     let text = input.userMessage.trim();
-    if (input.imageAnalysisSummary && !text.includes('[Photo]')) {
-      text = [text, `[Photo context: ${input.imageAnalysisSummary}]`].filter(Boolean).join('\n');
-    }
 
     if (input.imageUrlForVision) {
       const dataUrl = await uriToDataUrl(input.imageUrlForVision);
+      const caption = stripVisionPlaceholdersFromUserText(text) || 'What do you see in this image?';
       return {
         role: 'user',
         content: [
-          { type: 'text', text: text || 'What do you see in this image?' },
+          { type: 'text', text: `${caption}\n\n${IMAGE_TURN_VISION_INSTRUCTION}` },
           { type: 'image_url', image_url: { url: dataUrl } },
         ],
       };
+    }
+
+    if (input.imageAnalysisSummary && !text.includes('[Photo]')) {
+      text = [text, `[Photo context: ${input.imageAnalysisSummary}]`].filter(Boolean).join('\n');
     }
 
     return { role: 'user', content: text };

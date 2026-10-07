@@ -28,16 +28,18 @@ export type GatewayChatRequest = {
   metric?: string;
   amount?: number;
   idempotencyKey: string;
+  liveSearch?: boolean;
 };
 
 export type GatewayChatResponse =
-  | { ok: true; content: string }
+  | { ok: true; content: string; sourceLine?: string }
   | { ok: false; code?: string; message: string; httpStatus?: number };
 
 type GatewayErrorPayload = {
   ok?: boolean;
   duplicate?: boolean;
   content?: string;
+  sourceLine?: string;
   code?: string;
   message?: string;
   error?: string;
@@ -120,22 +122,27 @@ async function postToGateway(
     throw new TalkAIError('gateway_not_configured');
   }
 
-  const response = await fetchWithTimeout(gatewayUrl, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      apikey: anonKey,
-      'Content-Type': 'application/json',
-      'x-idempotency-key': request.idempotencyKey,
+  const response = await fetchWithTimeout(
+    gatewayUrl,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: anonKey,
+        'Content-Type': 'application/json',
+        'x-idempotency-key': request.idempotencyKey,
+      },
+      body: JSON.stringify({
+        messages: request.messages,
+        model: request.model,
+        maxTokens: request.maxTokens,
+        metric: request.metric,
+        amount: request.amount,
+        liveSearch: request.liveSearch === true,
+      }),
     },
-    body: JSON.stringify({
-      messages: request.messages,
-      model: request.model,
-      maxTokens: request.maxTokens,
-      metric: request.metric,
-      amount: request.amount,
-    }),
-  });
+    request.liveSearch ? 60_000 : undefined,
+  );
 
   const payload = parseGatewayPayload(await response.json().catch(() => ({})));
   return { payload, httpStatus: response.status };
@@ -161,7 +168,11 @@ function finalizeGatewayResult(
 ): GatewayChatResponse {
   if (httpStatus >= 200 && httpStatus < 300) {
     if (typeof payload.content === 'string' && payload.content.trim()) {
-      return { ok: true, content: payload.content };
+      const sourceLine =
+        typeof payload.sourceLine === 'string' && payload.sourceLine.trim()
+          ? payload.sourceLine.trim()
+          : undefined;
+      return { ok: true, content: payload.content, sourceLine };
     }
     return mapGatewayFailure(payload, httpStatus, 'AI gateway returned an empty response.');
   }
@@ -267,9 +278,11 @@ export function warmAiGateway(): void {
 }
 
 /** Throws TalkAIError for gateway failures — used by GatewayAIService. */
-export async function invokeAiGatewayChatOrThrow(request: GatewayChatRequest): Promise<string> {
+export async function invokeAiGatewayChatOrThrow(
+  request: GatewayChatRequest,
+): Promise<{ content: string; sourceLine?: string }> {
   const result = await invokeAiGatewayChat(request);
-  if (result.ok) return result.content;
+  if (result.ok) return { content: result.content, sourceLine: result.sourceLine };
 
   const code = classifyGatewayErrorMessage(result.message, result.code);
   throw new TalkAIError(code, result.message);

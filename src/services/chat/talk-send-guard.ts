@@ -56,7 +56,7 @@ export function isBurstRateLimitActive(guard: TalkSendGuard, now = Date.now()): 
 
 export function beginTalkSend(
   guard: TalkSendGuard,
-  input: { text: string; conversationId: string; now?: number },
+  input: { text: string; conversationId: string; now?: number; isRetry?: boolean },
 ): { accepted: true } | { accepted: false; reason: TalkSendRejectReason } {
   const now = input.now ?? Date.now();
   if (isTalkSendTimedOut(guard, now)) {
@@ -70,6 +70,7 @@ export function beginTalkSend(
   }
   const fingerprint = talkSendFingerprint(input.text, input.conversationId);
   if (
+    !input.isRetry &&
     fingerprint === guard.lastFingerprint &&
     now - guard.lastAcceptedAt < DUPLICATE_WINDOW_MS
   ) {
@@ -96,6 +97,16 @@ export function composerTextAfterFailedSend(input: {
   return input.currentComposer.trim() ? input.currentComposer : input.sentText;
 }
 
+export function resetTalkSendGuard(guard: TalkSendGuard): TalkSendGuard {
+  guard.inFlight = false;
+  guard.startedAt = 0;
+  guard.lastFingerprint = null;
+  guard.lastAcceptedAt = 0;
+  guard.lastText = '';
+  guard.burstCooldownUntil = 0;
+  return guard;
+}
+
 export function talkGatewayGenerationCountForAcceptedSends(acceptedCount: number): number {
   return acceptedCount;
 }
@@ -107,6 +118,11 @@ export function isStaleTalkRateLimitBanner(input: {
 }): boolean {
   const now = input.now ?? Date.now();
   if (!input.code || input.shownAt <= 0) return false;
+  if (input.code === 'usage_limited') {
+    const shownDay = new Date(input.shownAt).toISOString().slice(0, 10);
+    const nowDay = new Date(now).toISOString().slice(0, 10);
+    return nowDay > shownDay;
+  }
   if (input.code !== 'rate_limited') return false;
   return now - input.shownAt >= TALK_BURST_RATE_LIMIT_COOLDOWN_MS;
 }

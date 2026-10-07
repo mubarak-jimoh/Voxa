@@ -152,15 +152,19 @@ export class MemoryIntelligenceService {
     const timestamp = nowIso();
 
     const touched = await Promise.all(
-      gated.map(async (memory) =>
-        this.memories.updateMemory(memory.id, {
-          lastUsedAt: timestamp,
-          useCount: (memory.useCount ?? 0) + 1,
-          ...memoryAgingEngine.enrichOnUpdate(memory, {
+      gated.map(async (memory) => {
+        try {
+          return await this.memories.updateMemory(memory.id, {
+            lastUsedAt: timestamp,
             useCount: (memory.useCount ?? 0) + 1,
-          }),
-        }),
-      ),
+            ...memoryAgingEngine.enrichOnUpdate(memory, {
+              useCount: (memory.useCount ?? 0) + 1,
+            }),
+          });
+        } catch {
+          return memory;
+        }
+      }),
     );
 
     return touched;
@@ -213,9 +217,13 @@ export class MemoryIntelligenceService {
       });
     }
 
-    const explicitOnly = assessMemoryWrite(input.userMessage, writeContext);
-    if (explicitOnly?.shouldPersist && candidates.length === 0) {
-      candidates = [decisionToCandidate(explicitOnly)];
+    const policyWrite = assessMemoryWrite(input.userMessage, writeContext);
+    if (policyWrite?.shouldPersist) {
+      const fromPolicy = decisionToCandidate(policyWrite);
+      const already = candidates.some(
+        (item) => item.content.trim().toLowerCase() === fromPolicy.content.trim().toLowerCase(),
+      );
+      if (!already) candidates = [fromPolicy, ...candidates];
     }
 
     const upserted: Memory[] = [];

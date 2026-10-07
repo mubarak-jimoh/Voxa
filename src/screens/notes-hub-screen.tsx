@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   FlatList,
+  Keyboard,
   Pressable,
   Share,
   StyleSheet,
@@ -19,6 +20,7 @@ import { colors, layout, radius, spacing } from '../constants/theme';
 import { useVoxa } from '../context/voxa-context';
 import { RootStackParamList } from '../navigation/types';
 import { getNotesService } from '../services/notes/notes-service';
+import { notesListEmptyCopy } from '../services/notes/notes-empty-copy';
 import { trackEvent } from '../services/analytics/analytics-service';
 import { Note, NoteFolder, NOTE_TYPE_LABELS } from '../types/notes';
 import { isFeatureVisible } from '../config/feature-status';
@@ -98,6 +100,16 @@ export function NotesHubScreen({ navigation }: Props) {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    setFolderId(null);
+    setFavouritesOnly(false);
+    setShowArchived(false);
+    setQuery('');
+    setDebouncedQuery('');
+    setNotes([]);
+    setFolders([]);
+  }, [profile?.id]);
+
+  useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => setDebouncedQuery(query), 250);
     return () => {
@@ -107,7 +119,6 @@ export function NotesHubScreen({ navigation }: Props) {
 
   const load = useCallback(async () => {
     if (!profile || !isFeatureVisible('notes')) return;
-    setLoading(true);
     setError(null);
     try {
       const [list, folderList] = await Promise.all([
@@ -136,8 +147,9 @@ export function NotesHubScreen({ navigation }: Props) {
         text: 'Create',
         onPress: (name?: string) => {
           if (!name?.trim()) return;
-          void notesService.createFolder(profile.id, name.trim()).then(() => {
+          void notesService.createFolder(profile.id, name.trim()).then((folder) => {
             void hapticLight();
+            setFolderId(folder.id);
             void load();
           });
         },
@@ -154,7 +166,9 @@ export function NotesHubScreen({ navigation }: Props) {
   const createNote = async () => {
     if (!profile) return;
     void hapticMedium();
-    const note = await notesService.create(profile.id);
+    const note = await notesService.create(profile.id, {
+      folderId: folderId ?? null,
+    });
     trackEvent('note_created', { type: note.type });
     navigation.navigate('NoteEditor', { noteId: note.id });
   };
@@ -225,6 +239,13 @@ export function NotesHubScreen({ navigation }: Props) {
     );
   }
 
+  const selectedFolder = folders.find((folder) => folder.id === folderId) ?? null;
+  const emptyCopy = notesListEmptyCopy({
+    query: debouncedQuery,
+    folderName: selectedFolder?.name ?? null,
+    showArchived,
+    favouritesOnly,
+  });
   const pinned = notes.filter((n) => n.pinned);
   const recent = notes.filter((n) => !n.pinned);
   const sections: Array<{ title: string; data: Note[] }> = [];
@@ -235,7 +256,10 @@ export function NotesHubScreen({ navigation }: Props) {
     <ScreenShell>
       <View style={styles.pad}>
         <ScreenHeader
-          onBack={() => navigation.goBack()}
+          onBack={() => {
+            Keyboard.dismiss();
+            navigation.goBack();
+          }}
           title="Notes"
           subtitle="Private by default."
           right={<PremiumButton label="New" onPress={() => void createNote()} />}
@@ -249,6 +273,7 @@ export function NotesHubScreen({ navigation }: Props) {
           accessibilityLabel="Search notes"
           returnKeyType="search"
           clearButtonMode="while-editing"
+          onSubmitEditing={() => Keyboard.dismiss()}
         />
         <View style={styles.folderRow}>
           <Pressable
@@ -337,8 +362,8 @@ export function NotesHubScreen({ navigation }: Props) {
         <View style={styles.pad}>
           <EmptyState
             icon="create-outline"
-            title="No notes yet"
-            message="No notes yet. Capture an idea, plan or reminder."
+            title={emptyCopy.title}
+            message={emptyCopy.message}
             actionLabel={showArchived ? undefined : 'Create note'}
             onAction={showArchived ? undefined : () => void createNote()}
           />
@@ -348,6 +373,8 @@ export function NotesHubScreen({ navigation }: Props) {
           data={sections}
           keyExtractor={(item) => item.title}
           contentContainerStyle={styles.list}
+          keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
           renderItem={({ item: section, index }) => (
             <StaggerFade index={index}>
               <View style={styles.section}>

@@ -179,6 +179,11 @@ function ChatMessageBubbleComponent({
               <ChatMarkdownText text={message.text} selectable={selectMode} />
             )
           ) : null}
+          {!isUser && message.sourceLine ? (
+            <VoxaText variant="caption" color="textMuted" style={styles.sourceLine}>
+              {message.sourceLine}
+            </VoxaText>
+          ) : null}
           <View style={styles.footer}>
             {bookmarked ? <Ionicons name="bookmark" size={11} color={colors.primarySoft} /> : null}
             <VoxaText variant="caption" color="textMuted" style={styles.time}>
@@ -410,6 +415,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   time: { fontSize: 11, opacity: 0.85 },
+  sourceLine: { fontSize: 11, marginTop: 6, opacity: 0.8 },
   image: { width: 220, height: 160, borderRadius: radius.md, backgroundColor: colors.surface },
   backdrop: { flex: 1, backgroundColor: 'rgba(6,6,14,0.72)', justifyContent: 'flex-end' },
   sheet: {

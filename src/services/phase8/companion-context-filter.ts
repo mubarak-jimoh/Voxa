@@ -28,7 +28,7 @@ export function buildFocusedContextBlock(input: FocusedContextInput): string {
   if (input.relationshipStage) lines.push(`Bond: ${input.relationshipStage}`);
 
   const goalRelevant = input.context.activeGoals.filter(
-    (g) => lower.includes(g.title.toLowerCase().slice(0, 8)) || /\bgoal\b/i.test(lower),
+    (g) => lower.includes((g.title ?? '').toLowerCase().slice(0, 8)) || /\bgoal\b/i.test(lower),
   );
   if (goalRelevant.length > 0) {
     lines.push(`Relevant goals: ${goalRelevant.slice(0, 2).map((g) => g.title).join(', ')}`);
@@ -37,7 +37,7 @@ export function buildFocusedContextBlock(input: FocusedContextInput): string {
   }
 
   const memoryRelevant = input.context.topMemories.filter(
-    (m) => lower.includes(m.title.toLowerCase().slice(0, 10)),
+    (m) => lower.includes((m.title ?? '').toLowerCase().slice(0, 10)),
   );
   if (memoryRelevant.length > 0) {
     lines.push(`Memory callback: "${memoryRelevant[0].title}"`);

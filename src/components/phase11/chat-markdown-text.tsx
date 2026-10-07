@@ -2,6 +2,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { colors, spacing } from '../../constants/theme';
 import { VoxaText } from '../ui/voxa-text';
+import { sanitizeTalkDisplayText } from '../../services/chat/sanitize-talk-display';
 import { parseChatMarkdownBlocks, splitBoldSegments } from './chat-markdown';
 
 type Props = {
@@ -41,7 +42,7 @@ function InlineMarkdown({
 
 /** Lightweight markdown-ish rendering for assistant replies. */
 export function ChatMarkdownText({ text, tint = colors.text, selectable }: Props) {
-  const blocks = parseChatMarkdownBlocks(text);
+  const blocks = parseChatMarkdownBlocks(sanitizeTalkDisplayText(text));
 
   return (
     <View style={styles.wrap}>

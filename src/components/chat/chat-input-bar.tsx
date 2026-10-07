@@ -38,11 +38,12 @@ import {
 import { VoxaText } from '../ui/voxa-text';
 import { AttachmentPreviewTray } from './attachment-preview-tray';
 import { VoiceNoteRecorder } from './voice-note-recorder';
+import { shouldRestorePendingAttachments } from '../../services/chat/pending-attachment-send';
 
 type ChatInputBarProps = {
   value: string;
   onChangeText: (text: string) => void;
-  onSend: (attachments: PendingAttachmentInput[]) => void;
+  onSend: (attachments: PendingAttachmentInput[]) => boolean | void | Promise<boolean | void>;
   disabled?: boolean;
   voxaName: string;
   onVoiceNoteLimit?: (message: string) => void;
@@ -137,8 +138,12 @@ export function ChatInputBar({
       mediaTypes: ['images'],
       quality: 0.85,
     });
-    if (result.canceled || !result.assets[0]) return;
+    if (result.canceled || !result.assets[0]) {
+      inputRef.current?.focus();
+      return;
+    }
     await attachPreparedImage(result.assets[0]);
+    inputRef.current?.focus();
   };
 
   const pickFromGallery = async () => {
@@ -151,8 +156,12 @@ export function ChatInputBar({
       mediaTypes: ['images'],
       quality: 0.85,
     });
-    if (result.canceled || !result.assets[0]) return;
+    if (result.canceled || !result.assets[0]) {
+      inputRef.current?.focus();
+      return;
+    }
     await attachPreparedImage(result.assets[0]);
+    inputRef.current?.focus();
   };
 
   /** "+" opens attach actions — not Tools. Cancel / deny leaves composer unchanged. */
@@ -230,12 +239,18 @@ export function ChatInputBar({
     if (hasVoiceNote) {
       voiceNoteLog('SEND_SUCCESS');
     }
-    onSend(pendingAttachments);
+    const snapshot = pendingAttachments;
     setPendingAttachments([]);
     setRecordingMode(false);
-    queueMicrotask(() => {
-      submitLockRef.current = false;
-    });
+    void Promise.resolve(onSend(snapshot))
+      .then((accepted) => {
+        if (shouldRestorePendingAttachments(accepted)) {
+          setPendingAttachments(snapshot);
+        }
+      })
+      .finally(() => {
+        submitLockRef.current = false;
+      });
   };
 
   // When the keyboard is open it covers the home indicator, do not keep that inset
@@ -320,7 +335,7 @@ export function ChatInputBar({
               style={styles.input}
               returnKeyType="send"
               onSubmitEditing={handleSend}
-              editable={!disabled}
+              editable={true}
               multiline
               maxFontSizeMultiplier={1.35}
               onFocus={() => setFocused(true)}

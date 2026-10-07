@@ -224,13 +224,18 @@ export class NotesService {
 }
 
 let notesInstance: NotesService | null = null;
+let notesBoundStorage: IStorageService | null = null;
 
 export function getNotesService(storage: IStorageService) {
-  if (!notesInstance) notesInstance = new NotesService(storage);
+  if (!notesInstance || notesBoundStorage !== storage) {
+    notesInstance = new NotesService(storage);
+    notesBoundStorage = storage;
+  }
   return notesInstance;
 }
 
 /** Test helper — resets singleton between unit tests. */
 export function resetNotesServiceForTests() {
   notesInstance = null;
+  notesBoundStorage = null;
 }

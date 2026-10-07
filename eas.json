@@ -64,12 +64,12 @@
   "submit": {
     "preview": {
       "ios": {
-        "appleTeamId": "REPLACE_WITH_APPLE_TEAM_ID"
+        "appleTeamId": "SXNW3MGVRB"
       }
     },
     "production": {
       "ios": {
-        "appleTeamId": "REPLACE_WITH_APPLE_TEAM_ID"
+        "appleTeamId": "SXNW3MGVRB"
       }
     }
   }

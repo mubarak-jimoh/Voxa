@@ -42,6 +42,7 @@ import { resetRoutineCoachService } from './routine/routine-coach-service';
 import { resetCompanionJournalService } from './journal/companion-journal-service';
 import { resetNutritionService } from './nutrition/nutrition-service';
 import { resetNotesServiceForTests } from './notes/notes-service';
+import { resetPhotoMemoryServiceForTests } from './phase12/photo-memory-service';
 
 export type CreateVoxaServicesOptions = {
   storage?: IStorageService;
@@ -160,6 +161,7 @@ export function resetVoxaServices(options: CreateVoxaServicesOptions = {}): Voxa
   resetCompanionJournalService();
   resetNutritionService();
   resetNotesServiceForTests();
+  resetPhotoMemoryServiceForTests();
   voxaServicesSingleton = createVoxaServices(options);
   return voxaServicesSingleton;
 }

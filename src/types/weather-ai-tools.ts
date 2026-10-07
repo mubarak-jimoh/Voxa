@@ -53,4 +53,4 @@ export const WEATHER_TOOL_CONTRACTS: Record<
 };
 
 export const WEATHER_UNAVAILABLE_AI_LINE =
-  'I cannot retrieve weather right now. You can set your location in Settings → Weather location, then ask me again.';
+  'No weather location is saved. Ask which city they want, or to set it in Settings → Weather location. Do not invent a city or a forecast.';

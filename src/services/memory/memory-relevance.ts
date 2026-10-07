@@ -4,7 +4,7 @@ import { TalkIntent } from '../ai/companion-intent';
 import { MemoryPolicy } from '../ai/turn-intelligence-plan';
 import { inferMemoryTheme, themeOverlapScore } from './memory-theme-service';
 import { memoryAgingEngine } from '../personality/memory-aging-engine';
-import { isSupersededMemory, memoryConfidenceKind, TAG_EXPLICIT } from './memory-taxonomy';
+import { isSupersededMemory, memoryConfidenceKind, memoryTags, TAG_EXPLICIT } from './memory-taxonomy';
 import { isActiveOpenLoop, isCancelledMemory, isResolvedMemory, joinOpenLoops } from './open-loop-service';
 import { parseUserTemporal, readTemporalMeta } from './temporal-memory';
 import { ParsedTemporal, resolveDeviceTimeZone, sameLocalDay } from './temporal-parse';
@@ -161,14 +161,15 @@ export function scoreMemoryRelevance(memory: Memory, context: MemoryRetrievalCon
     cancelledOrResolved ? 0 : temporalAlignmentScore(memory, queryTemporal, timeZone);
   const meta = readTemporalMeta(memory, timeZone);
 
-  const pinnedBoost = memory.pinned === true || memory.tags.includes('pinned') ? 6 : 0;
-  const explicitBoost = memory.tags.includes(TAG_EXPLICIT) ? 2.5 : 0;
+  const tags = memoryTags(memory);
+  const pinnedBoost = memory.pinned === true || tags.includes('pinned') ? 6 : 0;
+  const explicitBoost = tags.includes(TAG_EXPLICIT) ? 2.5 : 0;
   const confidenceKind = memoryConfidenceKind(memory);
   const inferredPenalty = confidenceKind === 'inferred' ? -1.25 : 0;
 
   const queryText = [context.userMessage, ...(context.recentMessageTexts ?? [])].join(' ');
   const queryTokens = tokenize(queryText);
-  const searchable = `${memory.title} ${memory.content} ${memory.tags.join(' ')}`;
+  const searchable = `${memory.title} ${memory.content} ${tags.join(' ')}`;
 
   const keywordScore = overlapScore(queryTokens, searchable);
   const importanceScore = memory.importance / 5;

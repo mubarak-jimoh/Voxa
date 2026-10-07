@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import { ErrorState, LoadingState } from './src/components/ui/screen-state';
+import { ErrorState } from './src/components/ui/screen-state';
+import { BootLoadingScreen } from './src/components/ui/boot-loading-screen';
 import { AppErrorBoundary } from './src/components/ui/app-error-boundary';
 import { colors } from './src/constants/theme';
 import { hasSupabaseConfig } from './src/config/env';
@@ -66,7 +67,7 @@ function AppRoot() {
   if (isLoading) {
     return (
       <View style={styles.boot}>
-        <LoadingState label={hasSupabaseConfig() ? 'Syncing your companion...' : 'Starting Voxa...'} />
+        <BootLoadingScreen />
       </View>
     );
   }
@@ -116,7 +117,7 @@ function AppGate() {
   if (auth.isAuthEnabled && auth.isLoading) {
     return (
       <View style={styles.boot}>
-        <LoadingState label="Restoring session..." />
+        <BootLoadingScreen />
       </View>
     );
   }

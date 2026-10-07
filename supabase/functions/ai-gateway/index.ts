@@ -16,6 +16,14 @@ import {
   validatePayloadSize,
   type GatewayMessageContent,
 } from '../_shared/usage-guard.ts';
+import {
+  classifyOpenAiLiveHttpFailure,
+  countryFromTimeZone,
+  formatSourceLine,
+  parseResponsesLiveResult,
+  timeZoneFromInstructions,
+  toResponsesLivePayload,
+} from '../_shared/openai-live-search.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -25,7 +33,10 @@ const corsHeaders = {
 const ALLOWED_MODELS = ['gpt-4o-mini', 'gpt-4o'] as const;
 const MAX_MESSAGES = 25;
 const MAX_OUTPUT_TOKENS = 500;
+const LIVE_MAX_OUTPUT_TOKENS = 1800;
 const DEFAULT_MODEL = 'gpt-4o-mini';
+const LIVE_MODELS = ['gpt-4o-mini', 'gpt-4o'] as const;
+const LIVE_TOOLS = ['web_search', 'web_search_preview'] as const;
 
 type ChatRequest = {
   messages: {
@@ -36,6 +47,7 @@ type ChatRequest = {
   maxTokens?: number;
   metric?: string;
   amount?: number;
+  liveSearch?: boolean;
 };
 
 type ErrorBody = { ok: false; code: string; message: string };
@@ -73,6 +85,97 @@ function resolveMaxTokens(requested?: number): number {
   return Math.min(Math.floor(requested), MAX_OUTPUT_TOKENS);
 }
 
+type LiveSearchOk = {
+  ok: true;
+  text: string;
+  sourceTitles: string[];
+  inputTokens: number;
+  outputTokens: number;
+};
+
+type LiveSearchFail = { ok: false; reason: string };
+
+async function runLiveSearch(input: {
+  openAiKey: string;
+  preferredModel: string;
+  instructions: string;
+  input: unknown;
+}): Promise<LiveSearchOk | LiveSearchFail> {
+  const models = [
+    input.preferredModel,
+    ...LIVE_MODELS.filter((item) => item !== input.preferredModel),
+  ];
+  let lastReason = 'provider_http';
+
+  for (const liveModel of models) {
+    for (const toolType of LIVE_TOOLS) {
+      const country = countryFromTimeZone(timeZoneFromInstructions(input.instructions) ?? '');
+      const tool: Record<string, unknown> = { type: toolType };
+      if (country) {
+        tool.user_location = { type: 'approximate', country };
+      }
+
+      const liveResponse = await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${input.openAiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: liveModel,
+          instructions: input.instructions,
+          input: input.input,
+          tools: [tool],
+          tool_choice: 'required',
+          include: ['web_search_call.action.sources'],
+          max_output_tokens: LIVE_MAX_OUTPUT_TOKENS,
+          store: false,
+        }),
+      });
+
+      if (!liveResponse.ok) {
+        const errJson = await liveResponse.json().catch(() => null);
+        const errorCode =
+          errJson && typeof errJson === 'object'
+            ? String(
+                (errJson as { error?: { code?: unknown; type?: unknown } }).error?.code ??
+                  (errJson as { error?: { type?: unknown } }).error?.type ??
+                  '',
+              )
+            : '';
+        lastReason = classifyOpenAiLiveHttpFailure(liveResponse.status, errorCode);
+        console.error(
+          '[AI gateway] LIVE_SEARCH_FAILURE=' + lastReason + ' LIVE_SEARCH_HTTP=' + liveResponse.status,
+        );
+        if (liveResponse.status === 400) continue;
+        return { ok: false, reason: lastReason };
+      }
+
+      const liveJson = await liveResponse.json();
+      const parsed = parseResponsesLiveResult(liveJson);
+      if (!parsed.usedWebSearch) {
+        lastReason = 'no_tool_call';
+        console.error('[AI gateway] LIVE_SEARCH_FAILURE=no_tool_call');
+        continue;
+      }
+      if (!parsed.text) {
+        lastReason = 'empty_text';
+        console.error('[AI gateway] LIVE_SEARCH_FAILURE=empty_text');
+        continue;
+      }
+      return {
+        ok: true,
+        text: parsed.text,
+        sourceTitles: parsed.sourceTitles,
+        inputTokens: Number(liveJson?.usage?.input_tokens ?? 0) || 0,
+        outputTokens: Number(liveJson?.usage?.output_tokens ?? 0) || 0,
+      };
+    }
+  }
+
+  return { ok: false, reason: lastReason };
+}
+
 function parseChatRequest(payload: unknown): ChatRequest | null {
   if (!payload || typeof payload !== 'object') return null;
   const raw = payload as Record<string, unknown>;
@@ -101,6 +204,7 @@ function parseChatRequest(payload: unknown): ChatRequest | null {
     maxTokens: typeof raw.maxTokens === 'number' ? raw.maxTokens : undefined,
     metric: metricRaw || undefined,
     amount,
+    liveSearch: raw.liveSearch === true,
   };
 }
 
@@ -320,30 +424,54 @@ async function handleGatewayChat(input: {
     const model = resolveModel(payload.model);
     const maxTokens = resolveMaxTokens(payload.maxTokens);
 
-    const openAiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${openAiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model,
-        messages: payload.messages,
-        max_tokens: maxTokens,
-        temperature: 0.8,
-      }),
-    });
+    let content = '';
+    let sourceLine = '';
+    let inputTokens = 0;
+    let outputTokens = 0;
 
-    if (!openAiResponse.ok) {
-      const errorText = await openAiResponse.text();
-      console.error('[AI gateway] OpenAI error', openAiResponse.status, errorText.slice(0, 200));
-      return jsonError(502, 'provider_error', 'AI provider error');
+    if (payload.liveSearch) {
+      const live = toResponsesLivePayload(payload.messages);
+      const liveResult = await runLiveSearch({
+        openAiKey,
+        preferredModel: model,
+        instructions: live.instructions,
+        input: live.input,
+      });
+      if (!liveResult.ok) {
+        console.error('[AI gateway] LIVE_SEARCH_FAILURE=' + liveResult.reason);
+        return jsonError(502, 'live_unavailable', 'Current information could not be verified');
+      }
+      console.log('[AI gateway] LIVE_SEARCH_RESULT=success LIVE_SEARCH_TOOL_CALLED=true');
+      content = liveResult.text;
+      sourceLine = formatSourceLine(liveResult.sourceTitles);
+      inputTokens = liveResult.inputTokens;
+      outputTokens = liveResult.outputTokens;
+    } else {
+      const openAiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${openAiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          messages: payload.messages,
+          max_tokens: maxTokens,
+          temperature: 0.8,
+        }),
+      });
+
+      if (!openAiResponse.ok) {
+        const errorText = await openAiResponse.text();
+        console.error('[AI gateway] OpenAI error', openAiResponse.status, errorText.slice(0, 200));
+        return jsonError(502, 'provider_error', 'AI provider error');
+      }
+
+      const completion = await openAiResponse.json();
+      content = completion.choices?.[0]?.message?.content ?? '';
+      inputTokens = completion.usage?.prompt_tokens ?? 0;
+      outputTokens = completion.usage?.completion_tokens ?? 0;
     }
-
-    const completion = await openAiResponse.json();
-    const content = completion.choices?.[0]?.message?.content ?? '';
-    const inputTokens = completion.usage?.prompt_tokens ?? 0;
-    const outputTokens = completion.usage?.completion_tokens ?? 0;
 
     await supabase.from('usage_events').insert({
       user_id: userId,
@@ -380,6 +508,7 @@ async function handleGatewayChat(input: {
 
     return jsonSuccess({
       content,
+      sourceLine,
       usage: { inputTokens, outputTokens, plan },
       limits: ABUSE_LIMITS,
     });

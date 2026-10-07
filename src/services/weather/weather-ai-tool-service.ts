@@ -214,15 +214,34 @@ export function formatWeatherToolsForPrompt(results: WeatherToolResult[]): strin
       '  Rule: Answer ONLY using this data. Never invent weather.',
     ];
   });
-  return ['## Grounded weather data', ...lines].join('\n');
+  return [
+    '## Grounded weather data',
+    'You already have current measurements. Answer with these numbers.',
+    'Never say you cannot access, check, or get real-time weather.',
+    ...lines,
+  ].join('\n');
 }
 
 export async function buildWeatherPromptBlock(
   weatherService: WeatherService,
   userMessage: string,
+  options?: { placeQuery?: string },
 ): Promise<string> {
-  const inferred = inferWeatherTool(userMessage);
+  const inferred = inferWeatherTool(userMessage) ?? (options?.placeQuery
+    ? { tool: 'current_weather' as const }
+    : null);
   if (!inferred) return '';
+  if (options?.placeQuery) {
+    const fetch = await weatherService.fetchForecastForPlace(options.placeQuery);
+    if (!fetch.ok) {
+      return formatWeatherToolsForPrompt([unavailableWeatherTool(inferred.tool, fetch.message)]);
+    }
+    return formatWeatherToolsForPrompt([executeWeatherToolOnBundle(fetch.data, inferred)]);
+  }
   const result = await executeWeatherTool(weatherService, inferred);
   return formatWeatherToolsForPrompt([result]);
+}
+
+export function weatherPromptIsGrounded(block: string): boolean {
+  return block.includes('Answer ONLY using this data');
 }

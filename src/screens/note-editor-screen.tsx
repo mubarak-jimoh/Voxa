@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   AppState,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -41,6 +42,7 @@ import {
   NoteAIActionId,
   NoteAIActionResult,
   NoteChecklistItem,
+  NoteFolder,
   NoteMemoryConsent,
   NoteType,
   NOTE_TYPE_LABELS,
@@ -72,6 +74,8 @@ export function NoteEditorScreen({ navigation, route }: Props) {
   const [archived, setArchived] = useState(false);
   const [favourite, setFavourite] = useState(false);
   const [memoryConsent, setMemoryConsent] = useState<NoteMemoryConsent>('private');
+  const [folderId, setFolderId] = useState<string | null>(null);
+  const [folders, setFolders] = useState<NoteFolder[]>([]);
   const [saveState, setSaveState] = useState<SaveState>('idle');
   const [loading, setLoading] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -91,6 +95,7 @@ export function NoteEditorScreen({ navigation, route }: Props) {
     archived,
     favourite,
     memoryConsent,
+    folderId,
   });
 
   latestRef.current = {
@@ -103,6 +108,7 @@ export function NoteEditorScreen({ navigation, route }: Props) {
     archived,
     favourite,
     memoryConsent,
+    folderId,
   };
 
   const persist = useCallback(async () => {
@@ -124,6 +130,7 @@ export function NoteEditorScreen({ navigation, route }: Props) {
         archived: current.archived,
         favourite: current.favourite,
         memoryConsent: current.memoryConsent,
+        folderId: current.folderId,
       });
       if (updated) {
         let next = updated;
@@ -192,6 +199,8 @@ export function NoteEditorScreen({ navigation, route }: Props) {
     setArchived(loaded.archived);
     setFavourite(loaded.favourite);
     setMemoryConsent(loaded.memoryConsent);
+    setFolderId(loaded.folderId);
+    setFolders(await notesService.listFolders(profile.id));
     setLoading(false);
   }, [profile, noteId, notesService, navigation]);
 
@@ -200,7 +209,6 @@ export function NoteEditorScreen({ navigation, route }: Props) {
       void load();
       return () => {
         if (saveTimer.current) clearTimeout(saveTimer.current);
-        if (dirtyRef.current) void persist();
       };
     }, [load, persist]),
   );
@@ -217,9 +225,32 @@ export function NoteEditorScreen({ navigation, route }: Props) {
     scheduleSave();
   };
 
-  const goBack = useCallback(() => {
-    if (dirtyRef.current) void persist();
+  const goBack = useCallback(async () => {
+    Keyboard.dismiss();
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    if (dirtyRef.current) {
+      await persist();
+      if (dirtyRef.current) return;
+    }
     navigation.goBack();
+  }, [navigation, persist]);
+
+  useEffect(() => {
+    const unsub = navigation.addListener('beforeRemove', (e) => {
+      if (!dirtyRef.current) return;
+      e.preventDefault();
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+      }
+      void persist().then(() => {
+        if (!dirtyRef.current) navigation.dispatch(e.data.action);
+      });
+    });
+    return unsub;
   }, [navigation, persist]);
 
   const toggleChecklistItem = (id: string) => {
@@ -378,6 +409,21 @@ export function NoteEditorScreen({ navigation, route }: Props) {
     );
   };
 
+  const pickFolder = () => {
+    setMenuOpen(false);
+    Alert.alert('Move to folder', undefined, [
+      {
+        text: 'All notes (no folder)',
+        onPress: () => mark(() => setFolderId(null)),
+      },
+      ...folders.map((folder) => ({
+        text: folder.name,
+        onPress: () => mark(() => setFolderId(folder.id)),
+      })),
+      { text: 'Cancel', style: 'cancel' as const },
+    ]);
+  };
+
   if (loading || !note) {
     return (
       <ScreenShell>
@@ -410,7 +456,7 @@ export function NoteEditorScreen({ navigation, route }: Props) {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={insets.top}>
         <View style={[styles.toolbar, { paddingTop: insets.top + spacing.sm }]}>
-          <BackButton onPress={goBack} compact />
+          <BackButton onPress={() => void goBack()} compact />
           <VoxaText variant="caption" color="textMuted" style={styles.saveHint} numberOfLines={1}>
             {saveLabel}
           </VoxaText>
@@ -427,7 +473,11 @@ export function NoteEditorScreen({ navigation, route }: Props) {
           </Pressable>
         </View>
 
-        <View style={styles.editor}>
+        <ScrollView
+          style={styles.editor}
+          contentContainerStyle={styles.editorContent}
+          keyboardDismissMode="interactive"
+          keyboardShouldPersistTaps="handled">
           <TextInput
             value={title}
             onChangeText={(value) => mark(() => setTitle(value))}
@@ -439,10 +489,7 @@ export function NoteEditorScreen({ navigation, route }: Props) {
           />
 
           {type === 'checklist' ? (
-            <ScrollView
-              style={styles.checklistScroll}
-              contentContainerStyle={styles.checklistContent}
-              keyboardShouldPersistTaps="handled">
+            <View style={styles.checklistContent}>
               {checklist.map((item) => (
                 <View key={item.id} style={styles.checkRow}>
                   <Pressable
@@ -477,7 +524,7 @@ export function NoteEditorScreen({ navigation, route }: Props) {
                   Add item
                 </VoxaText>
               </Pressable>
-            </ScrollView>
+            </View>
           ) : (
             <TextInput
               value={body}
@@ -490,7 +537,7 @@ export function NoteEditorScreen({ navigation, route }: Props) {
               accessibilityLabel="Note body"
             />
           )}
-        </View>
+        </ScrollView>
       </KeyboardAvoidingView>
 
       <Modal visible={menuOpen} animationType="slide" transparent onRequestClose={() => setMenuOpen(false)}>
@@ -499,6 +546,9 @@ export function NoteEditorScreen({ navigation, route }: Props) {
             <VoxaText variant="subtitle">Note options</VoxaText>
             <VoxaText variant="caption" color="textMuted">
               {NOTE_TYPE_LABELS[type]} · {memoryLabel}
+              {folders.find((folder) => folder.id === folderId)
+                ? ` · ${folders.find((folder) => folder.id === folderId)?.name}`
+                : ''}
               {tagsText.trim() ? ` · ${tagsText.split(',').filter(Boolean).length} tags` : ''}
             </VoxaText>
             {(
@@ -518,6 +568,7 @@ export function NoteEditorScreen({ navigation, route }: Props) {
                   },
                 },
                 { label: 'Change note type', onPress: pickNoteType },
+                { label: 'Move to folder', onPress: pickFolder },
                 { label: 'Edit tags', onPress: editTags },
                 {
                   label: archived ? 'Unarchive' : 'Archive',
@@ -644,6 +695,9 @@ const styles = StyleSheet.create({
   },
   editor: {
     flex: 1,
+  },
+  editorContent: {
+    flexGrow: 1,
     paddingHorizontal: layout.screenPadding,
     paddingBottom: spacing.xl,
     gap: spacing.md,

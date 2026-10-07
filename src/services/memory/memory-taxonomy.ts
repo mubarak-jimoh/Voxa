@@ -62,13 +62,18 @@ export function resolveCompanionMemoryType(category: MemoryCategory, tags: strin
   return 'experience';
 }
 
+export function memoryTags(memory: Pick<Memory, 'tags'>): string[] {
+  return Array.isArray(memory.tags) ? memory.tags : [];
+}
+
 export function isSupersededMemory(memory: Memory): boolean {
-  return memory.tags.includes(TAG_SUPERSEDED);
+  return memoryTags(memory).includes(TAG_SUPERSEDED);
 }
 
 export function memoryConfidenceKind(memory: Memory): MemoryConfidenceKind {
-  if (memory.tags.includes(TAG_INFERRED)) return 'inferred';
-  if (memory.tags.includes(TAG_EXPLICIT)) return 'explicit';
+  const tags = memoryTags(memory);
+  if (tags.includes(TAG_INFERRED)) return 'inferred';
+  if (tags.includes(TAG_EXPLICIT)) return 'explicit';
   const score = memory.confidence ?? 0.72;
   if (score >= 0.85) return 'high';
   if (score >= 0.6) return 'medium';

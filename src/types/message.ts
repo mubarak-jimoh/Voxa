@@ -53,12 +53,16 @@ export type ChatMessageView = {
   createdAt: string;
   status?: MessageDeliveryStatus;
   attachments?: MessageAttachment[];
+  sourceLine?: string;
 };
 
 export function toChatMessageView(message: Message): ChatMessageView {
   if (message.role === 'system') {
     throw new Error('System messages are not shown in chat UI views.');
   }
+
+  const sourceLine =
+    typeof message.metadata?.sourceLine === 'string' ? message.metadata.sourceLine : undefined;
 
   return {
     id: message.id,
@@ -68,5 +72,6 @@ export function toChatMessageView(message: Message): ChatMessageView {
     createdAt: message.createdAt,
     status: message.status,
     attachments: message.attachments,
+    sourceLine,
   };
 }

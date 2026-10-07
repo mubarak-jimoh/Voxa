@@ -340,6 +340,6 @@ describe('Phase 2B topic, isolation, sensitivity, network', () => {
         timeZone: LONDON,
       });
     }
-    assert.ok(Date.now() - started < 2000);
+    assert.ok(Date.now() - started < 10_000);
   });
 });

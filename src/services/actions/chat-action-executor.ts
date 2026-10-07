@@ -12,9 +12,11 @@ import { getRoutineCoachService } from '../routine/routine-coach-service';
 import { formatTime12Hour } from '../../utils/time-parse';
 import {
   ActionIntentParser,
+  formatMemorySavedConfirmation,
   ParsedActionIntent,
   actionIntentParser,
 } from './action-intent-parser';
+import { TAG_EXPLICIT } from '../memory/memory-taxonomy';
 import { ParseMessageContext, parseMessageIntent } from './action-intent-resolver';
 
 export type ChatSideEffect =
@@ -94,7 +96,12 @@ export class ChatActionExecutor {
       mode: context.mode,
     };
 
-    const reminder = await this.repositories.reminders.createReminder(input);
+    const existing = (await this.repositories.reminders.listReminders(context.userId)).find((item) => {
+      if (item.status === 'cancelled' || item.status === 'completed') return false;
+      if (item.title.trim().toLowerCase() !== intent.title.trim().toLowerCase()) return false;
+      return Math.abs(new Date(item.scheduledAt).getTime() - intent.scheduledAt.getTime()) < 90_000;
+    });
+    const reminder = existing ?? (await this.repositories.reminders.createReminder(input));
     const scheduled = await scheduleLocalReminderIfAllowed(reminder);
     if (scheduled.ok) {
       await this.repositories.reminders.updateReminder(reminder.id, { notificationId: scheduled.notificationId });
@@ -253,13 +260,15 @@ export class ChatActionExecutor {
       source: 'conversation',
       relatedMode: context.mode,
       importance: 4,
+      confidence: 0.9,
+      tags: [TAG_EXPLICIT],
     };
 
     await this.repositories.memories.createMemory(input);
 
     return {
       success: true,
-      confirmationMessage: `Saved — I'll remember that ${intent.content.toLowerCase().replace(/\.$/, '')}.`,
+      confirmationMessage: formatMemorySavedConfirmation(intent.content),
     };
   }
 }

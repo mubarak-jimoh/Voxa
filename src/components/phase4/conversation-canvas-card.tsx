@@ -5,6 +5,7 @@ import { GlassCard } from '../ui/glass-card';
 import { colors, spacing } from '../../constants/theme';
 import { ConversationCanvas } from '../../types/phase4-intelligence';
 import { VoxaText } from '../ui/voxa-text';
+import { canvasChevronName, canvasSectionsForDisplay } from './conversation-canvas-display';
 
 type ConversationCanvasCardProps = {
   canvas: ConversationCanvas;
@@ -13,11 +14,16 @@ type ConversationCanvasCardProps = {
 };
 
 export function ConversationCanvasCard({ canvas, expanded, onToggle }: ConversationCanvasCardProps) {
-  const visibleSections = expanded ? canvas.sections : canvas.sections.filter((s) => s.items.length > 0).slice(0, 3);
+  const visibleSections = canvasSectionsForDisplay(canvas, Boolean(expanded));
 
   return (
     <GlassCard style={styles.card}>
-      <Pressable onPress={onToggle} style={styles.header}>
+      <Pressable
+        onPress={onToggle}
+        style={styles.header}
+        accessibilityRole="button"
+        accessibilityLabel={expanded ? 'Minimise workspace' : 'Expand workspace'}
+        accessibilityState={{ expanded: Boolean(expanded) }}>
         <View style={styles.headerCopy}>
           <VoxaText variant="label" color="primarySoft">
             Workspace · {canvas.topic}
@@ -26,31 +32,34 @@ export function ConversationCanvasCard({ canvas, expanded, onToggle }: Conversat
             {canvas.progressPercent}% mapped
           </VoxaText>
         </View>
-        <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color={colors.textMuted} />
+        <Ionicons name={canvasChevronName(Boolean(expanded))} size={16} color={colors.textMuted} />
       </Pressable>
 
-      <View style={styles.progressTrack}>
-        <View style={[styles.progressFill, { width: `${canvas.progressPercent}%` }]} />
-      </View>
-
-      {visibleSections.map((section) => (
-        <View key={section.id} style={styles.section}>
-          <VoxaText variant="caption" color="textMuted">
-            {section.title}
-          </VoxaText>
-          {section.items.length > 0 ? (
-            section.items.slice(0, expanded ? 6 : 2).map((item, index) => (
-              <VoxaText key={`${section.id}-${index}`} variant="body" color="textSecondary">
-                • {item}
+      {expanded ? (
+        <>
+          <View style={styles.progressTrack}>
+            <View style={[styles.progressFill, { width: `${canvas.progressPercent}%` }]} />
+          </View>
+          {visibleSections.map((section) => (
+            <View key={section.id} style={styles.section}>
+              <VoxaText variant="caption" color="textMuted">
+                {section.title}
               </VoxaText>
-            ))
-          ) : (
-            <VoxaText variant="caption" color="textMuted">
-              —
-            </VoxaText>
-          )}
-        </View>
-      ))}
+              {section.items.length > 0 ? (
+                section.items.slice(0, 6).map((item, index) => (
+                  <VoxaText key={`${section.id}-${index}`} variant="body" color="textSecondary">
+                    • {item}
+                  </VoxaText>
+                ))
+              ) : (
+                <VoxaText variant="caption" color="textMuted">
+                  —
+                </VoxaText>
+              )}
+            </View>
+          ))}
+        </>
+      ) : null}
     </GlassCard>
   );
 }

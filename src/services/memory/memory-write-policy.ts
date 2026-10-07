@@ -11,6 +11,7 @@ import {
   inferSemanticSlot,
   importanceFromLevel,
 } from './memory-taxonomy';
+import { classifyLiveInformationNeed } from '../ai/live-information';
 import { isDurableEnoughToStore } from './memory-quality';
 import { TAG_SENSITIVE, detectMemorySensitivity, shouldPersistSensitiveFact } from './memory-sensitivity';
 import { isOpenLoopEligible } from './open-loop-service';
@@ -47,7 +48,13 @@ const EXPLICIT_CORRECTION = /\b(that's wrong|that is wrong|actually|i don't anym
 const EXPLICIT_CONVERSATIONAL_STYLE =
   /\b(keep your (replies|answers) short|be more direct with me|be more direct|don't ask me loads of questions|don't ask so many questions|i like detailed explanations|be honest and just pick|you can joke with me)\b/i;
 
-const EXPLICIT_PREFERENCE = /\b(i prefer|i like|i love|i usually|i always|my goal is|i'm trying to|i am trying to|i'm working on|i am working on|i'm studying|i'm applying for|my interview is|my exam is|i box|times a week|i'm building|i am building)\b/i;
+const EXPLICIT_PREFERENCE = /\b(i prefer|i like|i love|i usually|i always|my goal is|i'm trying to|i am trying to|i'm working on|i am working on|i'm studying|i study (?!later|tonight|tomorrow|now|this|harder|more)|i'm applying for|my interview is|my exam is|i box|times a week|i'm building|i am building|i support |my lucky number|my (?:favourite|favorite)|my (?:dog|cat|pet)'s name)\b/i;
+
+const RECALL_QUESTION =
+  /^(what(?:'s| is| was)|who(?:'s| is)|where(?:'s| is)|when(?:'s| is)|why|how|did i|do you remember)\b/i;
+
+const THIRD_PERSON_FACT =
+  /\b((?:my )?(?:friend|mate|sister|brother|mum|mom|dad|partner|colleague)'s|his|her|their)\s+(lucky number|favourite|favorite|dog|cat)\b/i;
 
 const EXPLICIT_EVENT =
   /\b(driving test|i'?ve got (my|a|an) (driving test|interview|exam|test|deadline|meeting|appointment)|my test is|interview is|exam is|deadline is|they moved|rescheduled|postponed|waiting to hear|trying to finish|need to decide whether|accept the offer|meeting \w+ tomorrow)\b/i;
@@ -74,6 +81,10 @@ export function assessMemoryWrite(
   }
 
   const explicitRemember = EXPLICIT_REMEMBER.test(lower);
+  if (!explicitRemember && (/\?/.test(text) || RECALL_QUESTION.test(lower))) return null;
+  if (!explicitRemember && THIRD_PERSON_FACT.test(lower)) return null;
+  if (!explicitRemember && classifyLiveInformationNeed(text) !== 'none') return null;
+  if (!explicitRemember && /^\s*\[photo/i.test(text)) return null;
   if (!shouldPersistSensitiveFact(text, explicitRemember)) {
     return null;
   }
@@ -258,18 +269,25 @@ function inferCategoryFromText(lower: string): MemoryCategory {
   if (/\b(goal|working toward|trying to|building)\b/.test(lower)) return 'goals';
   if (/\b(train(?:ing|s|ed)?|gym|workout|exercise|switched to|i box|boxing)\b/.test(lower)) return 'fitness';
   if (/\b(study|exam|assignment|class)\b/.test(lower)) return 'study';
-  if (/\b(my mom|my dad|my friend|my partner|my sister|my brother)\b/.test(lower)) return 'people';
+  if (/\b(my (?:dog|cat|pet)|my mom|my dad|my friend|my partner|my sister|my brother)\b/.test(lower)) {
+    return 'people';
+  }
+  if (/\b(lucky number|favourite|favorite|i support)\b/.test(lower)) return 'favourites';
   if (/\b(interview|deadline|tomorrow|next week|driving test|friday|test is)\b/.test(lower)) return 'moments';
   return 'preferences';
 }
 
 function inferTitleFromText(lower: string, category: MemoryCategory): string {
+  if (/\blucky number\b/.test(lower)) return 'Lucky number';
+  if (/\b(?:dog|cat|pet)'s name\b/.test(lower)) return 'Pet';
+  if (/\bi support\b/.test(lower)) return 'Team';
   if (/\bdriving test\b/.test(lower)) return 'Driving test';
   if (category === 'goals') return 'Personal goal';
   if (category === 'fitness') return 'Training preference';
   if (category === 'study') return 'Study context';
   if (category === 'people') return 'Important person';
   if (category === 'moments') return 'Upcoming event';
+  if (category === 'favourites') return 'Favourite';
   return 'Preference';
 }
 

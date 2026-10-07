@@ -87,6 +87,10 @@ export function jpegFileNameFromSource(fileName?: string, uri?: string): string 
   return `photo-${Date.now()}.jpg`;
 }
 
+export function durableChatImageFileName(now = Date.now()): string {
+  return `voxa-chat-${now}.jpg`;
+}
+
 /** Scale so the longest edge is at most maxEdge. Does not upscale. */
 export function resizeDimensionsToMaxEdge(
   width: number,

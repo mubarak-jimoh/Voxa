@@ -6,6 +6,7 @@ import { logFeature } from '../../utils/feature-logger';
 import { buildVoxaSystemPrompt } from './voxa-system-prompt';
 import { TalkAIError } from './talk-ai-errors';
 import { TURN_INTELLIGENCE_END } from './turn-intelligence-plan';
+import { stripVisionPlaceholdersFromUserText } from './vision-follow-up';
 import {
   textCharsFromContent,
   validateVisionImageDataUrl,
@@ -36,9 +37,9 @@ export type GatewayPayloadDiagnostics = {
 const BASE64_DATA_URL = /data:[a-z0-9/+.-]+;base64,[a-z0-9+/=\s]+/gi;
 const PHOTO_FALLBACK = 'What do you see in this image?';
 
-/** Appended only when this turn includes a validated image_url part. */
+/** Appended next to the image_url part. Positive wording only — hedge phrases in the prompt prime hedge replies. */
 export const IMAGE_TURN_VISION_INSTRUCTION =
-  'An image is attached to this turn and is available for visual inspection. Answer questions about what is actually visible in the attached image. Do not claim that you cannot see, view, or access the image. If something is unclear, say what is uncertain rather than inventing visual details.';
+  'A photo is attached to this message. Answer from that photo. Describe visible objects, colours, layout, and setting. If on-screen writing is too small to read, say that after describing the rest of the scene.';
 
 export function truncateText(text: string, maxChars: number, suffix = '…'): string {
   if (maxChars <= 0) return '';
@@ -145,11 +146,6 @@ export function trimHistoryMessages(history: GatewayChatMessage[]): GatewayChatM
 export function buildUserTurnContent(input: GenerateReplyInput): GatewayMessageContent {
   let userText = stripEmbeddedPayloads(input.userMessage.trim());
 
-  if (input.imageAnalysisSummary && !userText.includes('[Photo]')) {
-    const summary = truncateText(input.imageAnalysisSummary, 400);
-    userText = [userText, `[Photo context: ${summary}]`].filter(Boolean).join('\n');
-  }
-
   if (input.imageUrlForVision) {
     const dataUrl = input.imageUrlForVision;
     const imageCheck = validateVisionImageDataUrl(dataUrl);
@@ -159,12 +155,16 @@ export function buildUserTurnContent(input: GenerateReplyInput): GatewayMessageC
         imageCheck.message,
       );
     }
-    const caption = userText.trim() || PHOTO_FALLBACK;
-    const text = `${caption}\n\n${IMAGE_TURN_VISION_INSTRUCTION}`;
+    const caption = stripVisionPlaceholdersFromUserText(userText) || PHOTO_FALLBACK;
     return [
-      { type: 'text', text },
+      { type: 'text', text: `${caption}\n\n${IMAGE_TURN_VISION_INSTRUCTION}` },
       { type: 'image_url', image_url: { url: dataUrl } },
     ];
+  }
+
+  if (input.imageAnalysisSummary && !userText.includes('[Photo]')) {
+    const summary = truncateText(input.imageAnalysisSummary, 400);
+    userText = [userText, `[Photo context: ${summary}]`].filter(Boolean).join('\n');
   }
 
   return userText;
@@ -291,6 +291,9 @@ export function buildBoundedGatewayChatMessages(input: GenerateReplyInput): {
       referencesRecentTurns: input.referencesRecentTurns,
       conversationState: input.conversationState,
       userMessage: input.userMessage,
+      hasAttachedImage: Array.isArray(userContent),
+      liveSearch: input.liveSearch === true,
+      liveSearchLocationLabel: input.liveSearchLocationLabel,
     }),
     AI_GATEWAY_BUDGETS.maxSystemPromptChars + AI_GATEWAY_BUDGETS.maxContextExtensionChars,
   );

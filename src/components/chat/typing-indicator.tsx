@@ -1,6 +1,7 @@
 import { StyleSheet, View } from 'react-native';
 
 import { spacing } from '../../constants/theme';
+import { ChatMarkdownText } from '../phase11/chat-markdown-text';
 import { VoxaText } from '../ui/voxa-text';
 import { TypingDots } from '../premium/premium-ui';
 
@@ -17,9 +18,7 @@ export function TypingIndicator({ voxaName, tint, streamingText, thinkingLabel }
       <View style={styles.avatarSpacer} />
       <View style={styles.bubble}>
         {streamingText ? (
-          <VoxaText variant="body" color="textSecondary">
-            {streamingText}
-          </VoxaText>
+          <ChatMarkdownText text={streamingText} tint={tint} />
         ) : (
           <View style={styles.thinkingRow}>
             <TypingDots tint={tint} />

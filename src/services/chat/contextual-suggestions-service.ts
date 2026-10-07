@@ -4,6 +4,8 @@ import { humourIsSuppressed, ResponseStance } from '../ai/turn-intelligence-plan
 import { SmartSuggestion } from '../../types/phase9-intelligence';
 import { createUuid } from '../../types';
 
+const SUMMARISE_PROMPT = 'Summarise that for me in a few short sentences';
+
 function suggestion(label: string, prompt: string, priority: number): SmartSuggestion {
   return {
     id: createUuid(),
@@ -12,6 +14,34 @@ function suggestion(label: string, prompt: string, priority: number): SmartSugge
     prompt,
     priority,
   };
+}
+
+export function userAskedForSummary(userMessage: string): boolean {
+  return /\b(summarise|summarize|tldr|tl;dr)\b/i.test(userMessage);
+}
+
+/** Long, multi-sentence replies only — not tiny or already-requested summaries. */
+export function replyIsWorthSummarising(reply: string, userMessage = ''): boolean {
+  if (userAskedForSummary(userMessage)) return false;
+  const text = reply.trim();
+  if (text.length < 420) return false;
+  const sentences = text.split(/[.!?]+/).map((part) => part.trim()).filter((part) => part.length > 18);
+  return sentences.length >= 3;
+}
+
+function looksLikeAChoice(userMessage: string, voxaReply: string): boolean {
+  const user = userMessage.toLowerCase();
+  if (/\b(which (one|should|is|would)|decide between|compare them|pick one|just pick)\b/.test(user)) {
+    return true;
+  }
+  if (/\bbetween\b.+\band\b/.test(user) || /\bshould i\b.+\bor\b/.test(user)) return true;
+  const listed = voxaReply.split('\n').filter((line) => /^\s*(\d+\.|[-•])\s+\S/.test(line));
+  return listed.length >= 2;
+}
+
+function summariseChip(userMessage: string, voxaReply: string): SmartSuggestion[] {
+  if (!replyIsWorthSummarising(voxaReply, userMessage)) return [];
+  return [suggestion('Summarise', SUMMARISE_PROMPT, 88)];
 }
 
 export function playfulChipsForbidden(input: {
@@ -48,8 +78,10 @@ export function buildContextualSuggestions(input: {
   });
 
   if (safety) return [];
-  if (intent === 'factual_question' || stance === 'inform') return [];
   if (intent === 'celebration' || stance === 'celebrate') return [];
+  if (intent === 'factual_question' || stance === 'inform') {
+    return summariseChip(user, input.voxaReply);
+  }
   if (stance === 'listen' && (/\b(just (need to )?vent|don't want advice|do not want advice|please just listen|no advice)\b/i.test(lower) || intent === 'emotional_support')) {
     return [];
   }
@@ -78,10 +110,13 @@ export function buildContextualSuggestions(input: {
       ];
 
     case 'decision_support':
-      return [
-        suggestion('Pick one', 'Pick one for me', 90),
-        suggestion('Compare them', 'Compare them', 85),
-      ];
+      if (looksLikeAChoice(user, input.voxaReply)) {
+        return [
+          suggestion('Pick one', 'Pick one for me', 90),
+          suggestion('Compare them', 'Compare them', 85),
+        ];
+      }
+      break;
 
     case 'memory_recall':
       return [
@@ -99,17 +134,20 @@ export function buildContextualSuggestions(input: {
       break;
   }
 
-  if (stance === 'plan' || stance === 'coach') {
-    return [
-      suggestion('Make me a plan', 'Make me a plan for this', 90),
-      suggestion('Prioritise these', 'Prioritise these for me', 85),
-      suggestion('Break it into steps', 'Break this into steps', 80),
-    ];
+  const chips = summariseChip(user, input.voxaReply);
+  if (
+    /\b(explain|how (do|does|can)|what is|what are|in simple terms)\b/i.test(user) &&
+    input.voxaReply.trim().length >= 220 &&
+    !userAskedForSummary(user)
+  ) {
+    chips.push(suggestion('Give me an example', 'Give me a simple example', 82));
+  }
+  if (looksLikeAChoice(user, input.voxaReply) && intent === 'advice') {
+    chips.push(suggestion('Help me decide', 'Help me decide', 80));
   }
 
-  if (stance === 'challenge') return [];
-
-  return [];
+  if (stance === 'challenge') return chips.slice(0, 3);
+  return chips.slice(0, 3);
 }
 
 export function contextualSuggestionPrompts(input: {

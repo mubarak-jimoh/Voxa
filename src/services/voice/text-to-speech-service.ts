@@ -11,6 +11,7 @@ import { audioSessionManager, createAudioPlayer } from '../audio/audio-session-m
 import { setVoiceDebugState, ttsLog } from './voice-debug-state';
 import { clipTextForTtsGateway, resolveAllowedTtsVoice } from './tts-contract';
 import { invokeTtsGatewayOrThrow } from './tts-gateway-client';
+import { hasAudioPlaybackCompleted, hasAudioPlaybackStarted } from './audio-playback-complete';
 
 export interface ITextToSpeechService {
   speak(text: string, config: VoiceSpeechConfig | VoicePersonality): Promise<void>;
@@ -277,13 +278,42 @@ export class HybridTextToSpeechService implements ITextToSpeechService {
         clearInterval(poll);
         clearTimeout(startTimeout);
         clearTimeout(playTimeout);
+        try {
+          statusSub?.remove();
+        } catch {
+          // ignore
+        }
         fn();
       };
 
+      const onStatus = (status: {
+        isLoaded?: boolean;
+        playing?: boolean;
+        didJustFinish?: boolean;
+        currentTime?: number;
+        duration?: number;
+        playbackState?: string;
+      }) => {
+        if (this.cancelled) {
+          finish(resolve);
+          return;
+        }
+        if (hasAudioPlaybackStarted(status)) {
+          playbackStarted = true;
+          clearTimeout(startTimeout);
+        }
+        if (hasAudioPlaybackCompleted(status, playbackStarted)) {
+          ttsLog('TTS PLAYBACK END', providerLabel);
+          finish(resolve);
+        }
+      };
+
+      const statusSub = player.addListener('playbackStatusUpdate', onStatus);
+
       const startTimeout = setTimeout(() => {
         if (!playbackStarted) {
-          ttsLog('TTS STUCK FALLBACK', `${providerLabel} playback did not start within 3s`);
-          finish(() => reject(new Error('TTS playback did not start within 3s')));
+          ttsLog('TTS STUCK FALLBACK', `${providerLabel} playback did not start within 8s`);
+          finish(() => reject(new Error('TTS playback did not start within 8s')));
         }
       }, PLAYBACK_START_TIMEOUT_MS);
 
@@ -296,17 +326,7 @@ export class HybridTextToSpeechService implements ITextToSpeechService {
           finish(resolve);
           return;
         }
-        const status = player.currentStatus;
-        if (!status.isLoaded) return;
-        if (status.playing && !playbackStarted) {
-          playbackStarted = true;
-          clearTimeout(startTimeout);
-          ttsLog('TTS PLAYBACK START', providerLabel);
-        }
-        if (status.didJustFinish) {
-          ttsLog('TTS PLAYBACK END', providerLabel);
-          finish(resolve);
-        }
+        onStatus(player.currentStatus);
       }, 100);
 
       try {

@@ -22,9 +22,34 @@ import { formatActiveEventForPrompt, joinOpenLoops } from '../memory/open-loop-s
 import { overlapScore, tokenize } from '../memory/memory-relevance';
 import { parseUserTemporal, readTemporalMeta } from '../memory/temporal-memory';
 import { resolveDeviceTimeZone } from '../memory/temporal-parse';
-import { resolveMemoryPolicy } from './turn-intelligence-plan';
+import { resolveMemoryPolicy, TURN_INTELLIGENCE_END } from './turn-intelligence-plan';
+import { liveInformationSystemBlock } from './live-information';
 
 const MAX_MEMORIES_IN_PROMPT = AI_GATEWAY_BUDGETS.maxMemoriesInPrompt;
+
+/** Positive vision rules. Naming inability-to-see in the prompt primes hedge replies. */
+export const ATTACHED_PHOTO_GUIDANCE = [
+  '## Attached photo',
+  'A photo is attached to this message. You can see it. Answer from that photo. Describe visible objects, colours, layout, and setting.',
+  'If printed or on-screen writing is too small to read, describe the rest of the scene first, then say that the smaller writing is unreadable. Do not invent the unread words.',
+  'If a person appears, describe the visible scene and clothing. Do not guess their name.',
+  'Start from what is visible. Do not open by denying that the photo is visible.',
+].join('\n');
+
+const ATTACHED_PHOTO_TURN_AUTHORITY =
+  'Photo on this turn: you can see it. Describe what is visible. Unreadable writing is not a missing photo. Do not guess a person\'s name.';
+
+/** Place photo rules inside turn intelligence so later "authoritative" notes cannot override them. */
+export function applyAttachedPhotoTurnAuthority(
+  turnBlock: string,
+  hasAttachedImage: boolean,
+): string {
+  if (!hasAttachedImage) return turnBlock;
+  if (!turnBlock.trim()) return ATTACHED_PHOTO_TURN_AUTHORITY;
+  const end = turnBlock.indexOf(TURN_INTELLIGENCE_END);
+  if (end < 0) return `${turnBlock.trim()}\n${ATTACHED_PHOTO_TURN_AUTHORITY}`;
+  return `${turnBlock.slice(0, end)}${ATTACHED_PHOTO_TURN_AUTHORITY}\n${turnBlock.slice(end)}`;
+}
 
 const MEMORY_TRUST_BLOCK = `
 ## Memory trust levels
@@ -54,6 +79,10 @@ export function buildVoxaSystemPrompt(input: {
   referencesRecentTurns?: boolean;
   conversationState?: import('./companion-strategy').ConversationState;
   userMessage?: string;
+  /** True only when this Talk turn includes a validated image_url part. */
+  hasAttachedImage?: boolean;
+  liveSearch?: boolean;
+  liveSearchLocationLabel?: string;
 }): string {
   const mode = COMPANION_MODES[input.mode];
   const intent = input.talkIntent ?? 'unknown';
@@ -104,7 +133,20 @@ export function buildVoxaSystemPrompt(input: {
     `- ${VOXA_SAFETY.notEmergency}`,
     '- If someone mentions self-harm, abuse, or immediate danger, respond with compassion and urge them to contact local emergency services or a trusted person right now.',
     '',
-    input.turnIntelligenceBlock?.trim() ?? '',
+    input.hasAttachedImage
+      ? `${ATTACHED_PHOTO_GUIDANCE}\n`
+      : 'This turn has no attached photo. Answer the text using conversation and stored memories where relevant.',
+    input.liveSearch
+      ? `${liveInformationSystemBlock({
+          timeZone: input.userProfile.timezone,
+          nowIso: now,
+          locationLabel: input.liveSearchLocationLabel,
+        })}\n`
+      : '',
+    applyAttachedPhotoTurnAuthority(
+      input.turnIntelligenceBlock?.trim() ?? '',
+      Boolean(input.hasAttachedImage),
+    ),
     '',
     buildResponseQualityBlock(intent, input.referencesRecentTurns ?? false, input.conversationState),
     '',
@@ -131,6 +173,12 @@ export function buildVoxaSystemPrompt(input: {
     includeMemories ? '\n## Relevant memories\n' + memoryBlock : '',
     includeGoals && goalsBlock ? `\n## Active goals\n${goalsBlock}` : '',
     includeReminders && remindersBlock ? `\n## Upcoming reminders\n${remindersBlock}` : '',
+    '',
+    '## Everyday life',
+    '- Help with ordinary life, including university, work, and home, as the same companion — not a specialist student bot.',
+    '- For making friends, approaching someone, settling in, loneliness, societies, group work, study, or deadlines: give practical, human advice and a realistic thing they could actually say or do.',
+    '- Do not claim access to university systems, timetables, student records, or live campus information unless it was supplied or retrieved this turn.',
+    '- Do not sound like a corporate coach.',
     '',
     '## Notes privacy',
     '- User notes are private by default. Never claim you read a note unless its content was attached in this conversation or the user explicitly shared it.',

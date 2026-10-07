@@ -38,6 +38,7 @@ import { FeatureLimitError, SubscriptionService } from './billing/subscription-s
 import { UsageTrackingService } from './billing/usage-tracking-service';
 import { GateResult } from '../types/subscription';
 import { asArray } from '../utils/as-array';
+import { logFeature } from '../utils/feature-logger';
 import { talkPerf, talkPerfNow } from '../utils/talk-perf';
 import { buildLocalTalkMessage, talkIntentSkipsMemoryRetrieval } from './chat/talk-critical-path';
 import { isBillingDormant } from '../config/launch-mode';
@@ -95,7 +96,7 @@ import {
   resolveFriendshipLevel,
 } from './relationship/relationship-growth-service';
 import { FRIENDSHIP_LEVEL_LABELS } from '../types/relationship-growth';
-import { buildWeatherPromptBlock } from './weather/weather-ai-tool-service';
+import { buildWeatherPromptBlock, weatherPromptIsGrounded } from './weather/weather-ai-tool-service';
 import { getWeatherService } from './weather/weather-service';
 import { getNutritionService } from './nutrition/nutrition-service';
 import { getDaysSinceLastVisit } from './companion/companion-presence-service';
@@ -114,6 +115,19 @@ import { routineProactiveService } from './proactive/routine-proactive-service';
 import { TodayRoutineSummary } from '../types/routine';
 import { IStorageService } from './contracts';
 import { classifyTalkIntent } from './ai/companion-intent';
+import {
+  resolveLiveInformationPlan,
+  shapeLivePublicAnswer,
+  WEATHER_ASK_CITY_USER_LINE,
+} from './ai/live-information';
+import { sanitizeTalkDisplayText } from './chat/sanitize-talk-display';
+import {
+  DISTANCE_UNVERIFIED_LINE,
+  formatVerifiedDistanceReply,
+  lookupStraightLineDistance,
+  parseDistanceQuestion,
+} from './location/postcode-distance';
+import { resolveImageUrlForVision, stripVisionPlaceholdersFromUserText } from './ai/vision-follow-up';
 import { buildCompanionStrategy, logCompanionStrategyDiagnostic } from './ai/companion-strategy';
 import { buildTurnIntelligencePlan } from './ai/turn-intelligence-plan';
 import {
@@ -1071,7 +1085,25 @@ export class VoxaCompanionService {
     const persistUserStarted = talkPerfNow();
     const seedHistory = input.recentHistory ?? [];
     const talkIntentEarly = classifyTalkIntent(effectiveUserText, seedHistory);
-    const skipMemory = talkIntentSkipsMemoryRetrieval(talkIntentEarly.intent);
+    const previousAssistantText = [...seedHistory].reverse().find((item) => item.role === 'voxa')?.content;
+    let livePlan = resolveLiveInformationPlan({
+      userMessage: effectiveUserText,
+      previousAssistantText,
+    });
+    if (livePlan.kind === 'weather' && this.storage) {
+      const hasSavedWeatherLocation = await getWeatherService(this.storage).hasSavedLocation();
+      livePlan = resolveLiveInformationPlan({
+        userMessage: effectiveUserText,
+        previousAssistantText,
+        hasSavedWeatherLocation,
+      });
+    }
+    let liveSearch = livePlan.liveSearch;
+    logFeature(
+      'live.information',
+      'start',
+      `LIVE_KIND=${livePlan.kind} LIVE_SEARCH_ROUTE=${liveSearch} ASK_CITY=${livePlan.askForWeatherCity}`,
+    );
     const isFactualFastPath = talkIntentEarly.intent === 'factual_question';
     const goalsPromise = isFactualFastPath
       ? Promise.resolve([] as Goal[])
@@ -1100,6 +1132,46 @@ export class VoxaCompanionService {
       ? Promise.resolve(userDraft)
       : this.persistTalkMessageRemote(userDraft);
     let userMessage = userDraft;
+
+    if (livePlan.askForWeatherCity) {
+      const voxaMessage = buildLocalTalkMessage({
+        id: createId('msg'),
+        conversationId: input.conversationId,
+        role: 'voxa',
+        content: WEATHER_ASK_CITY_USER_LINE,
+        mode: input.mode,
+      });
+      await this.repositories.messages.upsertMessage(voxaMessage);
+      await this.repositories.messages.updateMessage(userMessage.id, { status: 'sent' }).catch(() => undefined);
+      options?.onAssistantReady?.({ userMessage, voxaMessage });
+      void persistUserRemote.catch(() => undefined);
+      void this.persistTalkMessageRemote(voxaMessage).catch(() => undefined);
+      void this.repositories.conversations
+        .updateConversation(input.conversationId, { lastMessageAt: voxaMessage.createdAt })
+        .catch(() => undefined);
+      logFeature('live.information', 'success', 'LIVE_KIND=weather LIVE_SEARCH_ROUTE=false ASK_CITY=true');
+      return { userMessage, voxaMessage };
+    }
+
+    if (!hasAttachments && parseDistanceQuestion(effectiveUserText)) {
+      const lookup = await lookupStraightLineDistance(effectiveUserText);
+      const voxaMessage = buildLocalTalkMessage({
+        id: createId('msg'),
+        conversationId: input.conversationId,
+        role: 'voxa',
+        content: lookup.ok ? formatVerifiedDistanceReply(lookup) : DISTANCE_UNVERIFIED_LINE,
+        mode: input.mode,
+      });
+      await this.repositories.messages.upsertMessage(voxaMessage);
+      await this.repositories.messages.updateMessage(userMessage.id, { status: 'sent' }).catch(() => undefined);
+      options?.onAssistantReady?.({ userMessage, voxaMessage });
+      void persistUserRemote.catch(() => undefined);
+      void this.persistTalkMessageRemote(voxaMessage).catch(() => undefined);
+      void this.repositories.conversations
+        .updateConversation(input.conversationId, { lastMessageAt: voxaMessage.createdAt })
+        .catch(() => undefined);
+      return { userMessage, voxaMessage };
+    }
 
     if (this.storage) {
       void getProactiveCheckInOrchestrator(this.storage, this.repositories)
@@ -1238,6 +1310,11 @@ export class VoxaCompanionService {
         : await getMoodIntelligenceService(this.storage).getUnifiedMoodHistory(input.userId);
     talkPerf('history', talkPerfNow() - historyStarted);
     const talkIntentResult = classifyTalkIntent(effectiveUserText, history);
+    imageUrlForVision = resolveImageUrlForVision({
+      currentTurnUri: imageUrlForVision,
+      userMessage: effectiveUserText,
+      history,
+    });
 
     if (profile.preferences.memoryEnabled) {
       await this.memoryEngine.handleUserMemoryCommand(input.userId, effectiveUserText);
@@ -1252,14 +1329,18 @@ export class VoxaCompanionService {
       userMessage: effectiveUserText,
       moodHistory,
       talkIntent: talkIntentResult.intent,
-      skipMemoryRetrieval: talkIntentSkipsMemoryRetrieval(talkIntentResult.intent),
+      skipMemoryRetrieval: talkIntentSkipsMemoryRetrieval(talkIntentResult.intent) || liveSearch || livePlan.kind !== 'none',
     });
     talkPerf('memory', talkPerfNow() - contextStarted);
     const effectiveMode = unifiedContext.mode;
-    const memories = profile.preferences.memoryEnabled ? unifiedContext.topMemories : [];
+    const memories =
+      livePlan.kind !== 'none' || liveSearch || !profile.preferences.memoryEnabled ? [] : unifiedContext.topMemories;
     const activeGoals = activeGoalsForParse;
     const allReminders = remindersForParse;
     const selectedContextModules = selectContextModules(talkIntentResult.intent, effectiveUserText);
+    if (livePlan.kind === 'weather' && !selectedContextModules.includes('weather')) {
+      selectedContextModules.push('weather');
+    }
     const wants = (module: ContextModule) => selectedContextModules.includes(module);
 
     const extrasStarted = talkPerfNow();
@@ -1314,7 +1395,9 @@ export class VoxaCompanionService {
             ? getDailyCheckInService(storage).getTodayEntry('evening')
             : Promise.resolve(null),
           wants('weather')
-            ? buildWeatherPromptBlock(getWeatherService(storage), effectiveUserText)
+            ? buildWeatherPromptBlock(getWeatherService(storage), effectiveUserText, {
+                placeQuery: livePlan.weatherPlaceQuery,
+              })
             : Promise.resolve(''),
           wants('nutrition')
             ? (async () => {
@@ -1511,6 +1594,15 @@ export class VoxaCompanionService {
 
     const reflectionBlock = '';
 
+    let weatherContext = weatherBlock;
+    if (livePlan.kind === 'weather') {
+      liveSearch = !weatherPromptIsGrounded(weatherContext);
+      if (liveSearch) {
+        weatherContext = '';
+        logFeature('live.information', 'start', 'LIVE_KIND=weather LIVE_SEARCH_ROUTE=true WEATHER_FALLBACK=true');
+      }
+    }
+
     const companionContextExtension = assembleRoutedContextExtension(selectedContextModules, {
       companion_core: this.companionIntelligence.getPromptExtension(unifiedContext, { includeMemories: false }),
       phase4_quality: buildPhase4PromptExtension(),
@@ -1523,7 +1615,7 @@ export class VoxaCompanionService {
       challenge: challengeBlock,
       reflection: reflectionBlock,
       journal: journalBlock,
-      weather: weatherBlock,
+      weather: weatherContext,
       nutrition: nutritionBlock,
       notes: notesBlock,
       faith: faithBlock,
@@ -1532,7 +1624,9 @@ export class VoxaCompanionService {
 
     const aiInput = {
       mode: effectiveMode,
-      userMessage: effectiveUserText,
+      userMessage: imageUrlForVision
+        ? stripVisionPlaceholdersFromUserText(effectiveUserText) || input.content.trim()
+        : effectiveUserText,
       conversationHistory: history,
       userProfile: profile,
       memories,
@@ -1546,7 +1640,9 @@ export class VoxaCompanionService {
       conversationState: turnPlan.state,
       contextModules: selectedContextModules,
       imageUrlForVision,
-      imageAnalysisSummary,
+      imageAnalysisSummary: imageUrlForVision || liveSearch ? undefined : imageAnalysisSummary,
+      liveSearch,
+      liveSearchLocationLabel: livePlan.weatherPlaceQuery,
     };
 
     logCompanionStrategyDiagnostic({
@@ -1557,17 +1653,27 @@ export class VoxaCompanionService {
 
     let aiResult: GenerateReplyResult;
     const gatewayStarted = talkPerfNow();
-    if (options?.onStreamChunk && isStreamCapableAI(this.ai)) {
-      aiResult = await this.ai.generateReplyStream(aiInput, options.onStreamChunk);
+    const publishChunk = options?.onStreamChunk
+      ? (chunk: string) => {
+          let next = sanitizeTalkDisplayText(chunk, { timeZone: profile.timezone });
+          if (liveSearch) next = shapeLivePublicAnswer(effectiveUserText, next);
+          options.onStreamChunk!(next);
+        }
+      : undefined;
+    if (publishChunk && isStreamCapableAI(this.ai)) {
+      aiResult = await this.ai.generateReplyStream(aiInput, publishChunk);
     } else {
       aiResult = await this.ai.generateReply(aiInput);
-      if (options?.onStreamChunk) {
-        options.onStreamChunk(aiResult.content);
+      if (publishChunk) {
+        publishChunk(aiResult.content);
       }
     }
     talkPerf('gateway', talkPerfNow() - gatewayStarted);
 
-    let replyContent = aiResult.content;
+    let replyContent = sanitizeTalkDisplayText(aiResult.content, { timeZone: profile.timezone });
+    if (liveSearch) {
+      replyContent = shapeLivePublicAnswer(effectiveUserText, replyContent);
+    }
     const quality = scoreResponseQuality(replyContent, responsePlan, recentVoxaTexts, companionStrategy);
     if (!quality.passed) {
       replyContent = polishResponse(replyContent, quality.issues);
@@ -1580,6 +1686,7 @@ export class VoxaCompanionService {
       role: 'voxa',
       content: replyContent,
       mode: effectiveMode,
+      metadata: aiResult.sourceLine ? { sourceLine: aiResult.sourceLine } : undefined,
     });
     await this.repositories.messages.upsertMessage(voxaMessage);
     await this.repositories.messages.updateMessage(userMessage.id, { status: 'sent' }).catch(() => undefined);

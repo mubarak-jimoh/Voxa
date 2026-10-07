@@ -24,7 +24,11 @@ export function selectContextModules(intent: TalkIntent, userMessage: string): C
   const lower = userMessage.toLowerCase();
 
   if (intent === 'factual_question') {
-    return ['phase4_quality', 'phase9_plan'];
+    const modules: ContextModule[] = ['phase4_quality', 'phase9_plan'];
+    if (/\b(weather|rain|forecast|temperature|how hot|how cold)\b/i.test(lower)) {
+      modules.push('weather');
+    }
+    return modules;
   }
 
   if (intent === 'app_action_request') {
@@ -72,7 +76,7 @@ export function selectContextModules(intent: TalkIntent, userMessage: string): C
     modules.push('nutrition');
   }
 
-  if (/\b(note|notes|wrote down|journal entry)\b/i.test(lower) || intent === 'memory_recall') {
+  if (/\b(note|notes|wrote down|journal entry)\b/i.test(lower)) {
     modules.push('notes');
   }
 
@@ -99,7 +103,7 @@ function textSuggestsPersonality(lower: string): boolean {
 }
 
 function shouldIncludePhase8(intent: TalkIntent, lower: string): boolean {
-  if (['planning', 'decision_support', 'goal_progress', 'routine', 'productivity', 'memory_recall'].includes(intent)) {
+  if (['planning', 'decision_support', 'goal_progress', 'routine', 'productivity'].includes(intent)) {
     return true;
   }
   return /\b(today|tomorrow|tonight|schedule|when|plan|focus|goal|remember)\b/i.test(lower);

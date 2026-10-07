@@ -11,7 +11,6 @@ import {
   UnderstandActionIntentInput,
 } from '../contracts';
 import { CompanionModeId } from '../../types';
-import { TalkAIError } from './talk-ai-errors';
 import { invokeAiGatewayChatOrThrow } from './ai-gateway-client';
 import { buildGatewayChatMessagesWithDiagnostics } from './chat-message-builder';
 import { FakeAIService } from './fake-ai-service';
@@ -33,17 +32,16 @@ export class GatewayAIService implements IAIService {
   }
 
   async generateReply(input: GenerateReplyInput): Promise<GenerateReplyResult> {
-    const content = await this.completeTalk(input);
-    return { content };
+    return this.completeTalk(input);
   }
 
   async generateReplyStream(
     input: GenerateReplyInput,
     onChunk: (chunk: string) => void,
   ): Promise<GenerateReplyResult> {
-    const content = await this.completeTalk(input);
-    onChunk(content);
-    return { content };
+    const result = await this.completeTalk(input);
+    onChunk(result.content);
+    return result;
   }
 
   generateCheckInPrompt(input: GenerateCheckInInput): Promise<string> {
@@ -74,7 +72,7 @@ export class GatewayAIService implements IAIService {
     return (this.offline as IAIService).analyzeImage(input);
   }
 
-  private async completeTalk(input: GenerateReplyInput): Promise<string> {
+  private async completeTalk(input: GenerateReplyInput): Promise<GenerateReplyResult> {
     let gatewayInput = input;
     if (input.imageUrlForVision) {
       const dataUrl = await uriToVisionDataUrl(input.imageUrlForVision);
@@ -82,33 +80,21 @@ export class GatewayAIService implements IAIService {
     }
 
     const { messages } = buildGatewayChatMessagesWithDiagnostics(gatewayInput);
-    let idempotencyKey = createUuid();
+    const idempotencyKey = createUuid();
+    const result = await invokeAiGatewayChatOrThrow({
+      messages,
+      model: this.model,
+      maxTokens: MAX_OUTPUT_TOKENS,
+      metric: 'ai_messages',
+      amount: 1,
+      idempotencyKey,
+      liveSearch: input.liveSearch === true,
+    });
 
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        const content = await invokeAiGatewayChatOrThrow({
-          messages,
-          model: this.model,
-          maxTokens: MAX_OUTPUT_TOKENS,
-          metric: 'ai_messages',
-          amount: 1,
-          idempotencyKey,
-        });
-
-        const trimmed = content.trim();
-        if (!trimmed) {
-          throw new Error('AI gateway returned an empty response.');
-        }
-        return trimmed;
-      } catch (err) {
-        if (err instanceof TalkAIError && err.code === 'duplicate' && attempt === 0) {
-          idempotencyKey = createUuid();
-          continue;
-        }
-        throw err;
-      }
+    const trimmed = result.content.trim();
+    if (!trimmed) {
+      throw new Error('AI gateway returned an empty response.');
     }
-
-    throw new Error('AI gateway request failed.');
+    return { content: trimmed, sourceLine: result.sourceLine };
   }
 }

@@ -1,4 +1,4 @@
-import { ScrollView, Pressable, StyleSheet } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import { VoxaText } from '../ui/voxa-text';
 import { colors, radius, spacing } from '../../constants/theme';
@@ -19,7 +19,7 @@ export function ChatContextChips({ chips, onSelect }: Props) {
   if (visible.length === 0) return null;
 
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row}>
+    <View style={styles.wrap}>
       {visible.map((chip) => (
         <Pressable
           key={chip.id}
@@ -28,25 +28,40 @@ export function ChatContextChips({ chips, onSelect }: Props) {
           hitSlop={6}
           accessibilityRole="button"
           accessibilityLabel={chip.label}>
-          <VoxaText variant="caption" color="textSecondary">{chip.label}</VoxaText>
+          <VoxaText variant="caption" color="textSecondary" numberOfLines={1} style={styles.label}>
+            {chip.label}
+          </VoxaText>
         </Pressable>
       ))}
-    </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  row: { gap: spacing.sm, paddingHorizontal: spacing.md, paddingBottom: spacing.sm },
+  wrap: {
+    flexGrow: 0,
+    flexShrink: 0,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.sm,
+  },
   chip: {
+    alignSelf: 'flex-start',
+    flexGrow: 0,
+    flexShrink: 1,
+    maxWidth: '100%',
     paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
+    paddingVertical: 5,
     borderRadius: radius.chip,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.glassBorder,
     backgroundColor: colors.surfaceQuiet,
-    minHeight: 36,
     justifyContent: 'center',
   },
+  label: { flexShrink: 1, maxWidth: 180 },
   memory: { borderColor: `${colors.primarySoft}44` },
   goal: { borderColor: `${colors.primarySoft}66` },
 });

@@ -17,6 +17,21 @@ export class PhotoMemoryService {
     return (await this.list(userId, { includePrivate: true })).find((p) => p.id === id) ?? null;
   }
 
+  async findExisting(
+    userId: EntityId,
+    match: { localUri?: string; remoteUrl?: string; memoryId?: string },
+  ): Promise<PhotoMemory | null> {
+    const items = await this.list(userId, { includePrivate: true });
+    return (
+      items.find((photo) => {
+        if (match.memoryId && photo.memoryId === match.memoryId) return true;
+        if (match.localUri && photo.localUri === match.localUri) return true;
+        if (match.remoteUrl && photo.remoteUrl === match.remoteUrl) return true;
+        return false;
+      }) ?? null
+    );
+  }
+
   async create(userId: EntityId, input: Omit<PhotoMemory, 'id' | 'userId' | 'createdAt' | 'updatedAt'>): Promise<PhotoMemory> {
     const photo: PhotoMemory = { ...input, id: createUuid(), userId, createdAt: nowIso(), updatedAt: nowIso() };
     await this.upsert(userId, photo);
@@ -78,10 +93,19 @@ export class PhotoMemoryService {
 }
 
 let instance: PhotoMemoryService | null = null;
+let boundStorage: IStorageService | null = null;
 
 export function getPhotoMemoryService(storage: IStorageService) {
-  if (!instance) instance = new PhotoMemoryService(storage);
+  if (!instance || boundStorage !== storage) {
+    instance = new PhotoMemoryService(storage);
+    boundStorage = storage;
+  }
   return instance;
+}
+
+export function resetPhotoMemoryServiceForTests() {
+  instance = null;
+  boundStorage = null;
 }
 
 export const PHOTO_CATEGORIES: Array<{ id: PhotoMemoryCategory; label: string }> = [

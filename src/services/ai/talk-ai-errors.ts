@@ -10,6 +10,7 @@ export type TalkAIErrorCode =
   | 'message_too_large'
   | 'context_too_large'
   | 'image_too_large'
+  | 'live_unavailable'
   | 'provider_not_configured'
   | 'provider_error'
   | 'database_error'
@@ -55,7 +56,8 @@ const PRESENTATIONS: Record<TalkAIErrorCode, Presentation> = {
   },
   usage_limited: {
     message: 'AI gateway usage limit reached',
-    userMessage: "You've reached today's chat limit. You can keep reading this conversation and try again later.",
+    userMessage:
+      "You've reached today's chat limit. You can keep reading this conversation. Chat opens again after midnight UTC.",
     isDeploymentBlocker: false,
   },
   request_timeout: {
@@ -75,7 +77,13 @@ const PRESENTATIONS: Record<TalkAIErrorCode, Presentation> = {
   },
   image_too_large: {
     message: 'AI gateway image too large or invalid',
-    userMessage: 'That photo is too large or could not be read. Try another image.',
+    userMessage: "I couldn't process that photo. Please try attaching it again.",
+    isDeploymentBlocker: false,
+  },
+  live_unavailable: {
+    message: 'Live information could not be verified',
+    userMessage:
+      "I couldn't verify current information just now. Try again in a moment — I won't guess live scores, news, or weather.",
     isDeploymentBlocker: false,
   },
   provider_not_configured: {
@@ -137,6 +145,7 @@ const SERVER_CODE_MAP: Record<string, TalkAIErrorCode> = {
   context_too_large: 'context_too_large',
   image_too_large: 'image_too_large',
   invalid_image: 'image_too_large',
+  live_unavailable: 'live_unavailable',
   method_not_allowed: 'gateway_error',
 };
 
@@ -188,6 +197,9 @@ export function classifyGatewayErrorMessage(message: string, code?: string): Tal
   if (lower.includes('conversation context exceeds') || lower.includes('context too large')) {
     return 'context_too_large';
   }
+  if (lower.includes('could not be verified') || lower.includes('live_unavailable') || lower.includes('live information')) {
+    return 'live_unavailable';
+  }
   if (lower.includes('network') || lower.includes('fetch')) return 'network_error';
   if (lower.includes('non-2xx')) return 'gateway_error';
   return 'gateway_error';
@@ -219,4 +231,8 @@ export function isGatewayDeploymentError(err: unknown): boolean {
 
 export function isTransientTalkRateLimit(code: TalkAIErrorCode): boolean {
   return code === 'rate_limited';
+}
+
+export function talkErrorRetryCanSucceed(code: TalkAIErrorCode | string | null): boolean {
+  return code !== 'rate_limited' && code !== 'usage_limited';
 }

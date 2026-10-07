@@ -7,7 +7,7 @@ const EPHEMERAL = [
 ];
 
 const DURABLE_HINT =
-  /\b(prefer|usually|always|every|sister|brother|building|app called|driving test|interview|exam|deadline|times a week|from now on|remember)\b/i;
+  /\b(prefer|usually|always|every|sister|brother|building|app called|driving test|interview|exam|deadline|times a week|from now on|remember|lucky number|favourite|favorite|i support|i study|dog's name|cat's name)\b/i;
 
 export function isEphemeralChatter(text: string): boolean {
   const trimmed = text.trim();
