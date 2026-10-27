@@ -13,14 +13,14 @@
       <p class="brand"><a href="../">Voxa</a></p>
       <p class="tagline">Your AI life companion</p>
       <h1>Privacy Policy</h1>
-      <p class="meta">Last updated 4 October 2026</p>
+      <p class="meta">Last updated 27 October 2026</p>
     </header>
 
     <main>
       <section>
         <h2>Who operates Voxa</h2>
         <p>Voxa is a personal AI companion iOS app for conversation, reflection, planning, goals, routines, reminders, memories, personalisation, and Journey features. This Privacy Policy describes what information is processed when you use Voxa, why it is processed, and the choices available to you.</p>
-        <p>Voxa is operated by <strong>T3Pixel LTD</strong> in the United Kingdom.</p>
+        <p>Voxa is operated by <strong>T3Pixel LTD</strong>.</p>
         <p>Privacy and support contact: <a href="mailto:mujimoh2008@gmail.com">mujimoh2008@gmail.com</a>. You can also use <strong>You → Contact support</strong> in the app.</p>
       </section>
 
@@ -58,8 +58,10 @@
 
       <section>
         <h2>AI conversation processing</h2>
-        <p>When you chat with Voxa, relevant messages and selected context (such as memories, notes, goals, mood summaries, or weather context you allow) may be sent through our <strong>server-side AI gateway</strong> to AI service providers to generate replies. In the current V1 configuration, chat generation is provided by <strong>OpenAI</strong> when the gateway is configured. The iOS app does not embed a production OpenAI API key for Talk.</p>
-        <p>AI output can be inaccurate or incomplete. Do not share information you are not comfortable processing with AI systems. Voxa is instructed not to invent weather, calendar events, calorie logs, or memories.</p>
+        <p>Before Voxa sends personal information to <strong>OpenAI</strong>, the app asks you to allow or decline AI data sharing. Nothing is preselected. You choose the message you write and any photo you attach. If you allow sharing, Voxa also selects and sends recent conversation history and relevant saved context for that turn: display name, timezone, companion preferences, onboarding answers, memories, goals, reminders, and notes such as mood, check-in, journal, nutrition, or faith entries. Those selected details are not a separate message you typed in that turn. The transfer goes to OpenAI at api.openai.com through Voxa’s <strong>Supabase</strong> backend so OpenAI can generate a reply.</p>
+        <p>Ordinary replies use OpenAI’s chat completions endpoint with gpt-4o-mini or gpt-4o. That request sets <code>store</code> to false. OpenAI’s API reference describes that setting as not storing the completion for distillation or evaluation products. It does not stop OpenAI from processing the request, and it is not zero data retention. Some questions use the responses endpoint with a web-search tool. That request can include an approximate country derived from your timezone, and it also sets <code>store</code> to false. OpenAI’s data-controls guide says that avoids keeping the web-search response as application state. It does not skip abuse-monitoring logs. The iOS app does not embed a production OpenAI API key. AI output can be inaccurate or incomplete.</p>
+        <p>On 27 October 2026, the OpenAI organisation that owns Voxa’s production API key had these controls turned off: model feedback sharing, evaluation and fine-tuning data sharing, and sharing API inputs and outputs to improve models. Turning those controls off means those sharing programmes are not enabled. It does not mean OpenAI skips processing, and it does not mean OpenAI never stores the content it receives. In the same settings, audit logging was not enabled, and API call logging was set to enabled per call. Voxa has not confirmed what that per-call log contains or how long OpenAI keeps it. Voxa has no separate retention agreement with OpenAI, and these settings are not zero data retention.</p>
+        <p>OpenAI’s platform documentation, reviewed on 27 October 2026, says abuse-monitoring logs for the chat, responses, and speech endpoints may be kept for up to 30 days unless the law requires longer. Image inputs can be kept for review if a safety classifier flags them. OpenAI’s privacy policy is at <a href="https://openai.com/policies/privacy-policy">https://openai.com/policies/privacy-policy</a>. Its platform data controls are at <a href="https://developers.openai.com/api/docs/guides/your-data">https://developers.openai.com/api/docs/guides/your-data</a>. Its Services Agreement and Data Processing Addendum are at <a href="https://openai.com/policies/services-agreement">https://openai.com/policies/services-agreement</a> and <a href="https://openai.com/policies/data-processing-addendum">https://openai.com/policies/data-processing-addendum</a>. Using the API is how a customer accepts those published terms. Voxa has not recorded a separately signed order form or retention amendment.</p>
       </section>
 
       <section>
@@ -75,12 +77,13 @@
 
       <section>
         <h2>Photos and attachments</h2>
-        <p>If you capture or attach photos in chat, image files may be uploaded to cloud storage associated with your account when cloud sync is enabled. Attachment metadata may be stored with your messages.</p>
+        <p>If you capture or attach a photo in Talk, the image may be stored with your account when cloud sync is enabled, and attachment metadata may be stored with the message. If AI data sharing is allowed and you send that photo in the conversation, the image is included in the same request to OpenAI so Voxa can describe it.</p>
       </section>
 
       <section>
         <h2>Voice and spoken replies</h2>
-        <p>Optional spoken replies may use on-device text-to-speech or, if configured in a given build, a speech synthesis provider. Live voice calls and microphone-based chat are disabled in the current App Store release unless explicitly enabled in a future update. Microphone access is not required for standard text chat or spoken replies.</p>
+        <p>Spoken replies are on unless you turn them off. When AI data sharing is allowed and cloud speech is configured, the text of the reply is sent to OpenAI’s speech endpoint through Voxa’s Supabase backend so OpenAI can create the audio. The published speech reference does not include a store setting, so Voxa does not send one. OpenAI’s data-controls guide lists no application-state retention for that endpoint and lists abuse-monitoring retention of up to 30 days. A voice preview uses a fixed introduction. If you have not allowed AI data sharing, that preview is spoken on the device with Apple’s on-device speech and is not sent to OpenAI. If cloud speech is not configured, Apple’s on-device speech speaks the reply and the text is not sent to OpenAI.</p>
+        <p>Voxa 1.0 does not record the microphone for chat, voice notes, or live calls. Live voice calls are off in this release. Microphone access is not required for standard text chat or spoken replies.</p>
       </section>
 
       <section>
@@ -97,13 +100,13 @@
         <h2>Third-party service providers</h2>
         <p>We use service providers to operate Voxa, including:</p>
         <ul>
-          <li><strong>Supabase</strong> — authentication, database, and file storage when cloud sync is enabled; server-side functions including the AI gateway and account deletion</li>
-          <li><strong>OpenAI</strong> — chat generation via our server-side AI gateway when configured</li>
+          <li><strong>Supabase</strong> — authentication, database, and file storage when cloud sync is enabled; server-side functions including the AI gateway, speech gateway, and account deletion</li>
+          <li><strong>OpenAI</strong> — reply generation, photo description, and speech audio when you allow AI data sharing</li>
           <li><strong>Open-Meteo</strong> (or a configured weather proxy) — forecasts when weather is enabled</li>
-          <li><strong>Apple</strong> — App Store distribution and local notifications</li>
+          <li><strong>Apple</strong> — App Store distribution, on-device speech when cloud speech is unavailable or a voice preview is played without AI data sharing, and local notifications</li>
           <li><strong>Expo / EAS</strong> — app build and updates infrastructure</li>
         </ul>
-        <p>Voxa 1.0 is completely free — no subscriptions, ads, paid upgrades, or in-app purchases are offered in this release. These providers process data on our behalf to deliver the service.</p>
+        <p>Voxa 1.0 is completely free — no subscriptions, ads, paid upgrades, or in-app purchases are offered in this release. Voxa does not send conversations to an advertising network. Supabase publishes a Data Processing Addendum at <a href="https://supabase.com/legal/customer-resources/data-processing-addendum">https://supabase.com/legal/customer-resources/data-processing-addendum</a>. Voxa has not recorded a separately signed Supabase order in this policy. Voxa does not control OpenAI’s later handling of content it receives. The organisation settings described above are the controls checked on 27 October 2026. They are not zero data retention and they are not a promise that OpenAI never stores user content.</p>
       </section>
 
       <section>
@@ -113,17 +116,18 @@
 
       <section>
         <h2>Sharing and disclosure</h2>
-        <p>We do not sell your personal conversations. We share information with service providers who help us operate Voxa, when required by law, to protect rights and safety, or in connection with a merger or acquisition with appropriate safeguards. AI providers receive the message and context needed to generate replies; they do not receive your data for their own advertising.</p>
+        <p>We do not sell your personal conversations. If you allow AI data sharing, we send the categories described above to OpenAI through our backend so OpenAI can generate a reply or speech audio. We also share information with the other service providers listed above so they can perform the service you asked for, when required by law, to protect rights and safety, or in connection with a merger or acquisition.</p>
+        <p>You can decline AI data sharing or withdraw it later in <strong>You → Privacy &amp; data → AI data sharing</strong>. On the device where you do that, later transfers stop immediately. Other devices are blocked after the account update is saved, the next time they reach Voxa. Withdrawal does not recall a request that has already been sent, and it does not reach other devices while this device is offline.</p>
       </section>
 
       <section>
         <h2>Retention</h2>
-        <p>We retain information for as long as your account is active or as needed to provide the service, comply with legal obligations, resolve disputes, and enforce our terms. Cached data on your device persists until you delete it, sign out with local cleanup, or delete your account.</p>
+        <p>Voxa keeps account information while the account is active, including the AI data-sharing choice stored for that account. Voxa’s own usage record for an AI request stores counts, such as token totals and character counts, and does not store the message text. Cached data on your device remains until you delete it, sign out with local cleanup, or delete your account. Deleting the account removes the account’s cloud records that the deletion service is built to remove, including the consent record, once that record exists. This policy does not promise an OpenAI retention period. The organisation controls checked on 27 October 2026 turn off the listed sharing programmes and do not enable audit logging. API call logging was enabled per call. Voxa has no zero-data-retention approval and no separate retention agreement. OpenAI’s platform documentation reviewed on 27 October 2026 describes abuse-monitoring logs of up to 30 days for the chat, responses, and speech endpoints Voxa uses, unless the law requires longer, and says image inputs can be kept if a safety classifier flags them. Those documents also say chat completions are not kept as application state except for the documented image, audio-output, and prompt-cache exceptions, and that a responses request with store set to false is not kept as application state. None of this means OpenAI never stores the content it receives.</p>
       </section>
 
       <section>
         <h2>Your choices and rights</h2>
-        <p>You can review memories, export some of your data, delete individual memories, control optional permissions in iOS Settings, and request account deletion from the app (<strong>You → Privacy &amp; data</strong>). Where applicable under privacy laws such as UK GDPR, you may request access, correction, or deletion by contacting <a href="mailto:mujimoh2008@gmail.com">mujimoh2008@gmail.com</a>. You may complain to your local supervisory authority where applicable.</p>
+        <p>You can review memories, export some of your data, delete individual memories, turn spoken replies off, control optional permissions in iOS Settings, and request account deletion from the app (<strong>You → Privacy &amp; data</strong>). AI data sharing is off until you choose <strong>Allow AI data sharing</strong>. You can withdraw it from <strong>You → Privacy &amp; data → AI data sharing</strong>. Withdrawal blocks later Talk and speech transfers from that device immediately, and blocks other devices after the account update is saved. Where privacy law gives you a right of access, correction, or deletion, you may request it by contacting <a href="mailto:mujimoh2008@gmail.com">mujimoh2008@gmail.com</a>. You may complain to a supervisory authority where the law gives you that right.</p>
       </section>
 
       <section>
