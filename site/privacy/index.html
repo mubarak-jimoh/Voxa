@@ -13,7 +13,7 @@
       <p class="brand"><a href="../">Voxa</a></p>
       <p class="tagline">Your AI life companion</p>
       <h1>Privacy Policy</h1>
-      <p class="meta">Last updated 27 October 2026</p>
+      <p class="meta">Last updated 29 October 2026</p>
     </header>
 
     <main>
@@ -88,7 +88,11 @@
 
       <section>
         <h2>Location and weather</h2>
-        <p>Location is optional. You may allow device location, choose a city manually, or skip weather features. When enabled, approximate coordinates or your chosen city are used to fetch forecasts from a weather data provider (Open-Meteo by default, or a configured proxy). Location is not required for chat.</p>
+        <p>Location is optional. You may allow device location, choose a city manually, or skip weather features. Location is not required for chat.</p>
+        <p>If you allow device location, Voxa reads it while you are using the app. Voxa may send the latitude and longitude returned by the device to Open-Meteo at api.open-meteo.com to request a forecast. Those coordinates can be precise. Voxa does not round them to a city or region before sending them. That weather request does not include your Voxa account id. Voxa also stores the coordinates and the resulting place name on your device so it can show and refresh the forecast.</p>
+        <p>If you type a city instead, Voxa sends that place name to Open-Meteo’s geocoding service, then sends the latitude and longitude returned for that place to the forecast service.</p>
+        <p>Open-Meteo’s terms, reviewed on 29 October 2026, say that logs for the free API may contain geographical coordinates, are not shared with other parties, and are deleted after 90 days. Those terms also say Open-Meteo does not link IP addresses from the free API to user identities. Voxa has not inspected those logs and has no separate agreement with Open-Meteo. This policy does not say that coordinates are deleted as soon as the forecast is returned.</p>
+        <p>If you have allowed AI data sharing and you ask about weather, a city name, or a country derived from your timezone, may be included in the AI request described above. That request does not include the raw device coordinates.</p>
       </section>
 
       <section>
